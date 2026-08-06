@@ -31,6 +31,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _steamUsername;
     private LineEdit? _steamPassword;
     private LineEdit? _steamGuard;
+    private VBoxContainer? _steamGuardPanel;
+    private Label? _steamGuardMessage;
+    private TaskCompletionSource<string?>? _steamGuardCompletion;
+    private Button? _steamLoginTestButton;
     private Button? _steamDownloadButton;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
@@ -47,6 +51,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private RichTextLabel? _log;
     private int _busy;
     private bool _quitAfterToolInstall;
+    private string _presetFileStamp = string.Empty;
 
     public override void _EnterTree()
     {
@@ -82,6 +87,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         var buildGrid = CreateGrid(root);
         _preset = new OptionButton { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         PopulatePresets(_preset, settings.ExportPreset);
+        _presetFileStamp = GetPresetFileStamp();
         AddRow(buildGrid, "Export Preset", _preset);
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
 
@@ -104,7 +110,32 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _steamIgnore = AddLineRow(steamGrid, "Ignore Files", settings.SteamIgnoreFiles, "Comma-separated patterns");
         _steamUsername = AddLineRow(steamGrid, "Username", credentials.SteamUsername);
         _steamPassword = AddLineRow(steamGrid, "Password", credentials.SteamPassword, secret: true);
-        _steamGuard = AddLineRow(steamGrid, "Steam Guard Code", string.Empty, "Optional; never saved");
+        _steamLoginTestButton = new Button { Text = "Test Steam Login" };
+        _steamLoginTestButton.Pressed += StartSteamLoginTest;
+        AddRow(steamGrid, "Authentication", _steamLoginTestButton);
+
+        _steamGuardPanel = new VBoxContainer { Visible = false };
+        _steamGuardMessage = new Label
+        {
+            Text = "SteamCMD requires a Steam Guard code.",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        };
+        _steamGuardPanel.AddChild(_steamGuardMessage);
+        var steamGuardRow = new HBoxContainer();
+        _steamGuardPanel.AddChild(steamGuardRow);
+        _steamGuard = new LineEdit
+        {
+            PlaceholderText = "Steam Guard Code",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        steamGuardRow.AddChild(_steamGuard);
+        Button submitSteamGuard = new() { Text = "Submit Code" };
+        submitSteamGuard.Pressed += SubmitSteamGuardCode;
+        steamGuardRow.AddChild(submitSteamGuard);
+        Button cancelSteamGuard = new() { Text = "Cancel" };
+        cancelSteamGuard.Pressed += CancelSteamGuardCode;
+        steamGuardRow.AddChild(cancelSteamGuard);
+        root.AddChild(_steamGuardPanel);
 
         AddSection(root, "itch.io");
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
@@ -187,6 +218,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             action();
         }
 
+        RefreshPresetsIfChanged();
         UpdateButtonState();
     }
 
@@ -201,6 +233,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         _dock = null;
         _log = null;
+        _steamGuardCompletion?.TrySetResult(null);
+        _steamGuardCompletion = null;
     }
 
     private void StartWorkflow(bool build, bool upload)
@@ -349,27 +383,172 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Require(credentials.SteamPassword, "Steam password");
         string executable = ResolveExecutable(settings.SteamCmdPath, "SteamCMD", DeployToolKind.SteamCmd);
         string vdfPath = VdfGenerator.Generate(settings, contentRoot);
-        var arguments = new List<string>();
-        if (!string.IsNullOrWhiteSpace(credentials.SteamGuardCode))
-        {
-            arguments.Add("+set_steam_guard_code");
-            arguments.Add(credentials.SteamGuardCode.Trim());
-        }
-
-        arguments.Add("+login");
-        arguments.Add(credentials.SteamUsername);
-        arguments.Add(credentials.SteamPassword);
-        arguments.Add("+run_app_build");
-        arguments.Add(vdfPath);
-        arguments.Add("+quit");
         _pendingLogs.Enqueue("Uploading to Steam...");
-        CliProcessResult result = await CliProcessRunner.RunAsync(executable, arguments, workingDirectory, null, QueueProcessOutput).ConfigureAwait(false);
+        CliProcessResult result = await RunSteamCommandWithGuardAsync(
+            executable,
+            credentials,
+            new[] { "+run_app_build", vdfPath },
+            workingDirectory,
+            "Steam upload").ConfigureAwait(false);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException($"SteamCMD failed with exit code {result.ExitCode}.");
         }
 
         _pendingLogs.Enqueue("Steam upload completed.");
+    }
+
+    private void StartSteamLoginTest()
+    {
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            AppendLog("Another deployment operation is already running.");
+            return;
+        }
+
+        _ = RunSteamLoginTestAsync(ReadSettingsFromUi(), ReadCredentialsFromUi());
+    }
+
+    private async Task RunSteamLoginTestAsync(DeploySettings settings, DeployCredentials credentials)
+    {
+        try
+        {
+            Require(credentials.SteamUsername, "Steam username");
+            Require(credentials.SteamPassword, "Steam password");
+            string executable = ResolveExecutable(settings.SteamCmdPath, "SteamCMD", DeployToolKind.SteamCmd);
+            string projectPath = ProjectSettings.GlobalizePath("res://");
+            _pendingLogs.Enqueue("Testing Steam login...");
+            CliProcessResult result = await RunSteamCommandWithGuardAsync(
+                executable,
+                credentials,
+                Array.Empty<string>(),
+                projectPath,
+                "Steam login test").ConfigureAwait(false);
+            _pendingLogs.Enqueue(result.Succeeded
+                ? "Steam login test successful."
+                : $"ERROR: Steam login test failed with exit code {result.ExitCode}.");
+        }
+        catch (OperationCanceledException exception)
+        {
+            _pendingLogs.Enqueue(exception.Message);
+        }
+        catch (Exception exception)
+        {
+            _pendingLogs.Enqueue($"ERROR: Steam login test failed: {exception.Message}");
+        }
+        finally
+        {
+            HideSteamGuardPanel();
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task<CliProcessResult> RunSteamCommandWithGuardAsync(
+        string executable,
+        DeployCredentials credentials,
+        IReadOnlyList<string> commandArguments,
+        string workingDirectory,
+        string operationName)
+    {
+        string guardCode = string.Empty;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            var arguments = new List<string>();
+            if (!string.IsNullOrWhiteSpace(guardCode))
+            {
+                arguments.Add("+set_steam_guard_code");
+                arguments.Add(guardCode);
+            }
+
+            arguments.Add("+login");
+            arguments.Add(credentials.SteamUsername);
+            arguments.Add(credentials.SteamPassword);
+            arguments.AddRange(commandArguments);
+            arguments.Add("+quit");
+
+            CliProcessResult result = await CliProcessRunner.RunAsync(
+                executable,
+                arguments,
+                workingDirectory,
+                null,
+                QueueProcessOutput,
+                CliProcessRunner.IsSteamGuardRequired).ConfigureAwait(false);
+            if (!result.TerminatedByOutputPattern)
+            {
+                return result;
+            }
+
+            if (attempt == 2)
+            {
+                throw new InvalidOperationException("Steam Guard verification failed after three attempts.");
+            }
+
+            _pendingLogs.Enqueue("Steam Guard code required.");
+            guardCode = await RequestSteamGuardCodeAsync(operationName).ConfigureAwait(false)
+                ?? throw new OperationCanceledException("Steam Guard entry cancelled.");
+        }
+
+        throw new InvalidOperationException("Steam Guard verification did not complete.");
+    }
+
+    private Task<string?> RequestSteamGuardCodeAsync(string operationName)
+    {
+        var completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _pendingUiActions.Enqueue(() =>
+        {
+            _steamGuardCompletion?.TrySetResult(null);
+            _steamGuardCompletion = completion;
+            if (_steamGuardMessage is not null)
+            {
+                _steamGuardMessage.Text = $"SteamCMD requires a Steam Guard code to continue {operationName}.";
+            }
+
+            if (_steamGuard is not null)
+            {
+                _steamGuard.Text = string.Empty;
+                _steamGuard.GrabFocus();
+            }
+
+            if (_steamGuardPanel is not null)
+            {
+                _steamGuardPanel.Visible = true;
+            }
+        });
+        return completion.Task;
+    }
+
+    private void SubmitSteamGuardCode()
+    {
+        string code = _steamGuard?.Text.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return;
+        }
+
+        TaskCompletionSource<string?>? completion = _steamGuardCompletion;
+        _steamGuardCompletion = null;
+        if (_steamGuardPanel is not null) _steamGuardPanel.Visible = false;
+        if (_steamGuard is not null) _steamGuard.Text = string.Empty;
+        completion?.TrySetResult(code);
+    }
+
+    private void CancelSteamGuardCode()
+    {
+        TaskCompletionSource<string?>? completion = _steamGuardCompletion;
+        _steamGuardCompletion = null;
+        if (_steamGuardPanel is not null) _steamGuardPanel.Visible = false;
+        if (_steamGuard is not null) _steamGuard.Text = string.Empty;
+        completion?.TrySetResult(null);
+    }
+
+    private void HideSteamGuardPanel()
+    {
+        _pendingUiActions.Enqueue(() =>
+        {
+            if (_steamGuardPanel is not null) _steamGuardPanel.Visible = false;
+            if (_steamGuard is not null) _steamGuard.Text = string.Empty;
+            _steamGuardCompletion = null;
+        });
     }
 
     private async Task UploadItchAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory)
@@ -449,12 +628,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         SteamUsername = _steamUsername?.Text.Trim() ?? string.Empty,
         SteamPassword = _steamPassword?.Text ?? string.Empty,
-        SteamGuardCode = _steamGuard?.Text.Trim() ?? string.Empty,
+        SteamGuardCode = string.Empty,
         ButlerApiKey = _butlerApiKey?.Text.Trim() ?? string.Empty,
     };
 
     private static void PopulatePresets(OptionButton option, string selectedPreset)
     {
+        option.Clear();
         IReadOnlyList<string> presets = ExportPresetReader.ReadPresetNames();
         for (int index = 0; index < presets.Count; index++)
         {
@@ -466,6 +646,41 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
     }
 
+    private void RefreshPresetsIfChanged()
+    {
+        if (_preset is null)
+        {
+            return;
+        }
+
+        string currentStamp = GetPresetFileStamp();
+        if (currentStamp == _presetFileStamp)
+        {
+            return;
+        }
+
+        string selectedPreset = _preset.ItemCount > 0
+            ? _preset.GetItemText(_preset.Selected)
+            : string.Empty;
+        _presetFileStamp = currentStamp;
+        PopulatePresets(_preset, selectedPreset);
+        AppendLog($"Export presets refreshed ({_preset.ItemCount} found).");
+    }
+
+    private static string GetPresetFileStamp()
+    {
+        try
+        {
+            string path = ProjectSettings.GlobalizePath("res://export_presets.cfg");
+            var info = new FileInfo(path);
+            return info.Exists ? $"{info.LastWriteTimeUtc.Ticks}:{info.Length}" : "missing";
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return "invalid";
+        }
+    }
+
     private void UpdateButtonState()
     {
         bool busy = Volatile.Read(ref _busy) != 0;
@@ -473,6 +688,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
+        if (_steamLoginTestButton is not null)
+        {
+            bool canTestLogin = TryResolveExecutablePath(_steamCmd?.Text, DeployToolKind.SteamCmd, out _) &&
+                                !string.IsNullOrWhiteSpace(_steamUsername?.Text) &&
+                                !string.IsNullOrWhiteSpace(_steamPassword?.Text);
+            _steamLoginTestButton.Disabled = busy || !canTestLogin;
+        }
         if (_steamDownloadButton is not null)
         {
             bool missing = !TryResolveExecutablePath(_steamCmd?.Text, DeployToolKind.SteamCmd, out _);
@@ -657,6 +879,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} PROBE_BUTTON_PRESSED");
         GD.Print($"{LogPrefix} STEAM_DOWNLOAD_VISIBLE={_steamDownloadButton?.Visible}");
         GD.Print($"{LogPrefix} BUTLER_DOWNLOAD_VISIBLE={_butlerDownloadButton?.Visible}");
+        GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
+        GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
+        GD.Print($"{LogPrefix} GUARD_PATTERN_MATCHES={CliProcessRunner.IsSteamGuardRequired("FAILED login with result code RequireTwoFactorCode")}");
 
         string missingPath = Path.Combine(
             ProjectSettings.GlobalizePath("res://.deployer/tools"),

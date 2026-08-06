@@ -4,23 +4,37 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace GodotSteamItchIoDeployer;
 
-public sealed record CliProcessResult(int ExitCode, string CombinedOutput)
+public sealed record CliProcessResult(int ExitCode, string CombinedOutput, bool TerminatedByOutputPattern = false)
 {
     public bool Succeeded => ExitCode == 0;
 }
 
 public static class CliProcessRunner
 {
+    private static readonly Regex SteamGuardRequiredPattern = new(
+        "(not been authenticated for your account using Steam Guard|" +
+        "Steam Guard code:|" +
+        "Steam Guard code required|" +
+        "FAILED login with result code RequireTwoFactorCode|" +
+        "FAILED login with result code RequirePasswordEntry|" +
+        "Enter the current code from your Steam Guard)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    public static bool IsSteamGuardRequired(string output) => SteamGuardRequiredPattern.IsMatch(output);
+
     public static async Task<CliProcessResult> RunAsync(
         string executablePath,
         IReadOnlyList<string> arguments,
         string workingDirectory,
         IReadOnlyDictionary<string, string>? environment,
-        Action<string> onOutput)
+        Action<string> onOutput,
+        Func<string, bool>? terminateWhen = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -53,24 +67,79 @@ public static class CliProcessRunner
             throw new InvalidOperationException($"Could not start process: {executablePath}");
         }
 
-        var combined = new StringBuilder();
-        Task stdout = PumpAsync(process.StandardOutput, combined, onOutput);
-        Task stderr = PumpAsync(process.StandardError, combined, onOutput);
-        await Task.WhenAll(process.WaitForExitAsync(), stdout, stderr).ConfigureAwait(false);
-        return new CliProcessResult(process.ExitCode, combined.ToString());
-    }
-
-    private static async Task PumpAsync(System.IO.StreamReader reader, StringBuilder combined, Action<string> onOutput)
-    {
-        while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
+        int terminatedByPattern = 0;
+        void TerminateProcess()
         {
-            lock (combined)
+            if (Interlocked.Exchange(ref terminatedByPattern, 1) != 0)
             {
-                combined.AppendLine(line);
+                return;
             }
 
-            onOutput(line);
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the output match and the kill request.
+            }
         }
+
+        var combined = new StringBuilder();
+        Task stdout = PumpAsync(process.StandardOutput, combined, onOutput, terminateWhen, TerminateProcess);
+        Task stderr = PumpAsync(process.StandardError, combined, onOutput, terminateWhen, TerminateProcess);
+        await Task.WhenAll(process.WaitForExitAsync(), stdout, stderr).ConfigureAwait(false);
+        return new CliProcessResult(process.ExitCode, combined.ToString(), Volatile.Read(ref terminatedByPattern) != 0);
+    }
+
+    private static async Task PumpAsync(
+        System.IO.StreamReader reader,
+        StringBuilder combined,
+        Action<string> onOutput,
+        Func<string, bool>? terminateWhen,
+        Action terminateProcess)
+    {
+        var line = new StringBuilder();
+        var buffer = new char[1];
+        while (await reader.ReadAsync(buffer.AsMemory(0, 1)).ConfigureAwait(false) > 0)
+        {
+            char character = buffer[0];
+            if (character is '\r' or '\n')
+            {
+                PublishLine(line, combined, onOutput);
+                continue;
+            }
+
+            line.Append(character);
+            if (terminateWhen?.Invoke(line.ToString()) == true)
+            {
+                PublishLine(line, combined, onOutput);
+                terminateProcess();
+                return;
+            }
+        }
+
+        PublishLine(line, combined, onOutput);
+    }
+
+    private static void PublishLine(StringBuilder line, StringBuilder combined, Action<string> onOutput)
+    {
+        if (line.Length == 0)
+        {
+            return;
+        }
+
+        string text = line.ToString();
+        line.Clear();
+        lock (combined)
+        {
+            combined.AppendLine(text);
+        }
+
+        onOutput(text);
     }
 }
 #endif
