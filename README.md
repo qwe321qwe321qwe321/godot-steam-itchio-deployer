@@ -53,7 +53,7 @@ The export output is a file path because that is what Godot's export CLI require
 
 Steam uploads generate app/depot VDF files under `res://.deployer/steam-vdf` and invoke SteamCMD. itch.io uploads invoke `butler push` with `BUTLER_API_KEY` injected only into the child process environment.
 
-All child-process output is streamed into the shared log console.
+All child-process output is streamed into the shared log console. ANSI SGR formatting emitted by Godot, SteamCMD, or butler is translated to native `RichTextLabel` color, bold, italic, and underline styles; unsupported terminal control sequences are removed instead of appearing as raw codes.
 
 Automatically downloaded tools and local-only configuration live inside the Godot project under `res://.deployer/`. The entire directory must remain in `.gitignore`. SteamCMD automatic installation currently supports Windows. Butler automatic installation supports Windows, macOS, and Linux on x64/ARM64 when itch.io publishes the corresponding package.
 

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -14,6 +15,9 @@ namespace GodotSteamItchIoDeployer;
 public partial class SteamItchIoDeployerPlugin : EditorPlugin
 {
     private const string LogPrefix = "[GodotSteamItchIoDeployer]";
+    private static readonly Regex AnsiControlSequence = new(
+        "\\x1B\\[([0-?]*)([ -/]*)([@-~])",
+        RegexOptions.Compiled);
 
     private readonly ConcurrentQueue<string> _pendingLogs = new();
     private readonly ConcurrentQueue<Action> _pendingUiActions = new();
@@ -743,8 +747,137 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private void AppendLog(string message)
     {
         GD.Print($"{LogPrefix} {message}");
-        _log?.AppendText($"[{DateTime.Now:HH:mm:ss}] {message}\n");
+        if (_log is null)
+        {
+            return;
+        }
+
+        _log.AddText($"[{DateTime.Now:HH:mm:ss}] ");
+        AppendAnsiText(_log, message);
+        _log.Newline();
     }
+
+    private static void AppendAnsiText(RichTextLabel label, string text)
+    {
+        bool bold = false;
+        bool italics = false;
+        bool underline = false;
+        Color? color = null;
+        int offset = 0;
+
+        foreach (Match match in AnsiControlSequence.Matches(text))
+        {
+            AppendStyledText(label, text[offset..match.Index], bold, italics, underline, color);
+            offset = match.Index + match.Length;
+            if (match.Groups[3].Value != "m")
+            {
+                continue;
+            }
+
+            string parameters = match.Groups[1].Value;
+            string[] codes = string.IsNullOrEmpty(parameters) ? new[] { "0" } : parameters.Split(';');
+            foreach (string codeText in codes)
+            {
+                if (!int.TryParse(codeText, out int code))
+                {
+                    continue;
+                }
+
+                switch (code)
+                {
+                    case 0:
+                        bold = false;
+                        italics = false;
+                        underline = false;
+                        color = null;
+                        break;
+                    case 1: bold = true; break;
+                    case 3: italics = true; break;
+                    case 4: underline = true; break;
+                    case 22: bold = false; break;
+                    case 23: italics = false; break;
+                    case 24: underline = false; break;
+                    case 39: color = null; break;
+                    case >= 30 and <= 37:
+                    case >= 90 and <= 97:
+                        color = GetAnsiColor(code);
+                        break;
+                }
+            }
+        }
+
+        AppendStyledText(label, text[offset..], bold, italics, underline, color);
+    }
+
+    private static void AppendStyledText(
+        RichTextLabel label,
+        string text,
+        bool bold,
+        bool italics,
+        bool underline,
+        Color? color)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        int pushedStyles = 0;
+        if (color is Color textColor)
+        {
+            label.PushColor(textColor);
+            pushedStyles++;
+        }
+
+        if (bold && italics)
+        {
+            label.PushBoldItalics();
+            pushedStyles++;
+        }
+        else if (bold)
+        {
+            label.PushBold();
+            pushedStyles++;
+        }
+        else if (italics)
+        {
+            label.PushItalics();
+            pushedStyles++;
+        }
+
+        if (underline)
+        {
+            label.PushUnderline();
+            pushedStyles++;
+        }
+
+        label.AddText(text);
+        while (pushedStyles-- > 0)
+        {
+            label.Pop();
+        }
+    }
+
+    private static Color GetAnsiColor(int code) => code switch
+    {
+        30 => Color.FromHtml("#000000"),
+        31 => Color.FromHtml("#cd3131"),
+        32 => Color.FromHtml("#0dbc79"),
+        33 => Color.FromHtml("#e5e510"),
+        34 => Color.FromHtml("#2472c8"),
+        35 => Color.FromHtml("#bc3fbc"),
+        36 => Color.FromHtml("#11a8cd"),
+        37 => Color.FromHtml("#e5e5e5"),
+        90 => Color.FromHtml("#808080"),
+        91 => Color.FromHtml("#f14c4c"),
+        92 => Color.FromHtml("#23d18b"),
+        93 => Color.FromHtml("#f5f543"),
+        94 => Color.FromHtml("#3b8eea"),
+        95 => Color.FromHtml("#d670d6"),
+        96 => Color.FromHtml("#29b8db"),
+        97 => Color.FromHtml("#ffffff"),
+        _ => Colors.White,
+    };
 
     private void QueueProcessOutput(string line) => _pendingLogs.Enqueue(line);
 
