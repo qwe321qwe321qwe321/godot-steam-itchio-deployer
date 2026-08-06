@@ -1,0 +1,10 @@
+.godot/
+.idea/
+.vscode/
+bin/
+obj/
+*.user
+
+# Local-only deploy credentials and generated upload manifests.
+.deployer/
+

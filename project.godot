@@ -1,0 +1,23 @@
+; Engine configuration file.
+; Minimal host project used to develop and verify the reusable editor plugin.
+
+config_version=5
+
+[application]
+
+config/name="Godot Steam itch.io Deployer"
+config/features=PackedStringArray("4.7", "C#", "GL Compatibility")
+
+[dotnet]
+
+project/assembly_name="godot-steam-itchio-deployer"
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/godot-steam-itchio-deployer/plugin.cfg")
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+
