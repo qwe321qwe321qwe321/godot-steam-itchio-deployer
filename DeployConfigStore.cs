@@ -45,13 +45,13 @@ public static class DeployConfigStore
         var localConfig = new ConfigFile();
         if (localConfig.Load(LocalSettingsPath) == Error.Ok)
         {
-            settings.SteamCmdPath = ReadString(localConfig, "tools", "steamcmd_path", string.Empty);
-            settings.ButlerPath = ReadString(localConfig, "tools", "butler_path", string.Empty);
+            settings.SteamCmdPath = PreferProjectRelativePath(ReadString(localConfig, "tools", "steamcmd_path", string.Empty));
+            settings.ButlerPath = PreferProjectRelativePath(ReadString(localConfig, "tools", "butler_path", string.Empty));
         }
         else if (!string.IsNullOrWhiteSpace(legacySteamCmdPath) || !string.IsNullOrWhiteSpace(legacyButlerPath))
         {
-            settings.SteamCmdPath = legacySteamCmdPath;
-            settings.ButlerPath = legacyButlerPath;
+            settings.SteamCmdPath = PreferProjectRelativePath(legacySteamCmdPath);
+            settings.ButlerPath = PreferProjectRelativePath(legacyButlerPath);
             SaveSettings(settings);
         }
 
@@ -91,9 +91,54 @@ public static class DeployConfigStore
         }
 
         var localConfig = new ConfigFile();
-        localConfig.SetValue("tools", "steamcmd_path", settings.SteamCmdPath);
-        localConfig.SetValue("tools", "butler_path", settings.ButlerPath);
+        localConfig.SetValue("tools", "steamcmd_path", PreferProjectRelativePath(settings.SteamCmdPath));
+        localConfig.SetValue("tools", "butler_path", PreferProjectRelativePath(settings.ButlerPath));
         return localConfig.Save(LocalSettingsPath);
+    }
+
+    public static string ResolveProjectPath(string configuredPath)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return string.Empty;
+        }
+
+        string path = configuredPath.Trim();
+        if (path.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.GetFullPath(ProjectSettings.GlobalizePath(path));
+        }
+
+        if (Path.IsPathRooted(path))
+        {
+            return Path.GetFullPath(path);
+        }
+
+        return Path.GetFullPath(Path.Combine(GetProjectRoot(), path));
+    }
+
+    public static string PreferProjectRelativePath(string configuredPath)
+    {
+        if (string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            string absolutePath = ResolveProjectPath(configuredPath);
+            string relativePath = Path.GetRelativePath(GetProjectRoot(), absolutePath);
+            bool outsideProject = relativePath == ".." ||
+                                  relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+                                  Path.IsPathRooted(relativePath);
+            return outsideProject
+                ? absolutePath.Replace('\\', '/')
+                : relativePath.Replace('\\', '/');
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return configuredPath.Trim();
+        }
     }
 
     public static DeployCredentials LoadCredentials()
@@ -137,5 +182,8 @@ public static class DeployConfigStore
         string material = $"{OS.GetUniqueId()}|{ProjectSettings.GlobalizePath("res://")}|GodotSteamItchIoDeployer_v1";
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
+
+    private static string GetProjectRoot() =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(ProjectSettings.GlobalizePath("res://")));
 }
 #endif

@@ -38,7 +38,7 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
 3. Select Steam and/or itch.io and fill in the corresponding fields.
    - **Download & Install** next to SteamCMD appears only when the configured path cannot resolve to an existing executable. It downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
    - **Download & Install** next to Butler appears only when the configured path cannot resolve to an existing executable. It downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
-4. Use **Save Settings** to write shared non-secret values to `res://deploy_config.cfg`. Machine-specific SteamCMD and butler paths are stored separately at `res://.deployer/local_settings.cfg`.
+4. Use **Save Settings** to write shared non-secret values to `res://deploy_config.cfg`. Machine-specific SteamCMD and butler paths are stored separately at `res://.deployer/local_settings.cfg`. Paths inside the project are stored relative to the project root (for example `.deployer/tools/steamcmd/steamcmd.exe`); external tools retain absolute paths.
 5. Optionally use **Save Encrypted Credentials**. Credentials are machine- and project-bound and saved at `res://.deployer/credentials.cfg`. Steam Guard codes are never saved.
 
 Use **Test Steam Login** after filling in the SteamCMD path, username, and password. The Steam Guard field is hidden during normal setup. If SteamCMD reports that a Guard code is required during a login test or upload, the plugin stops that attempt, reveals a temporary code prompt, and retries the same operation after submission without rebuilding.

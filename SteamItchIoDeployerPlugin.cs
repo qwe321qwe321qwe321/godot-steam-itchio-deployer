@@ -292,7 +292,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 LineEdit? field = tool == DeployToolKind.SteamCmd ? _steamCmd : _butler;
                 if (field is not null)
                 {
-                    field.Text = executablePath;
+                    field.Text = DeployConfigStore.PreferProjectRelativePath(executablePath);
                 }
 
                 Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
@@ -599,7 +599,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
     private void SaveSettingsPressed()
     {
-        Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
+        DeploySettings settings = ReadSettingsFromUi();
+        Error error = DeployConfigStore.SaveSettings(settings);
+        if (error == Error.Ok)
+        {
+            if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
+            if (_butler is not null) _butler.Text = settings.ButlerPath;
+        }
         AppendLog(error == Error.Ok ? $"Settings saved to {DeployConfigStore.SettingsPath}." : $"Could not save settings: {error}");
     }
 
@@ -619,14 +625,14 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             Targets = targets,
             ExportPreset = _preset is { ItemCount: > 0 } ? _preset.GetItemText(_preset.Selected) : string.Empty,
             ExportOutputPath = _exportOutput?.Text.Trim() ?? string.Empty,
-            SteamCmdPath = _steamCmd?.Text.Trim() ?? string.Empty,
+            SteamCmdPath = DeployConfigStore.PreferProjectRelativePath(_steamCmd?.Text ?? string.Empty),
             SteamAppId = _steamAppId?.Text.Trim() ?? string.Empty,
             SteamDepotId = _steamDepotId?.Text.Trim() ?? string.Empty,
             SteamBuildDescription = _steamDescription?.Text ?? string.Empty,
             SteamSetLive = _steamSetLive?.ButtonPressed == true,
             SteamBranch = _steamBranch?.Text.Trim() ?? string.Empty,
             SteamIgnoreFiles = _steamIgnore?.Text ?? string.Empty,
-            ButlerPath = _butler?.Text.Trim() ?? string.Empty,
+            ButlerPath = DeployConfigStore.PreferProjectRelativePath(_butler?.Text ?? string.Empty),
             ItchTarget = _itchTarget?.Text.Trim() ?? string.Empty,
             ItchChannel = _itchChannel?.Text.Trim() ?? string.Empty,
             ItchUserVersion = _itchVersion?.Text ?? string.Empty,
@@ -756,7 +762,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         try
         {
-            string path = Path.GetFullPath(configuredPath.Trim());
+            string path = DeployConfigStore.ResolveProjectPath(configuredPath);
             if (File.Exists(path))
             {
                 executablePath = path;
@@ -890,6 +896,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} PROBE_BUTTON_PRESSED");
         GD.Print($"{LogPrefix} STEAM_DOWNLOAD_VISIBLE={_steamDownloadButton?.Visible}");
         GD.Print($"{LogPrefix} BUTLER_DOWNLOAD_VISIBLE={_butlerDownloadButton?.Visible}");
+        GD.Print($"{LogPrefix} STEAM_PATH_IS_RELATIVE={!Path.IsPathRooted(_steamCmd?.Text ?? string.Empty)}");
+        GD.Print($"{LogPrefix} BUTLER_PATH_IS_RELATIVE={!Path.IsPathRooted(_butler?.Text ?? string.Empty)}");
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
