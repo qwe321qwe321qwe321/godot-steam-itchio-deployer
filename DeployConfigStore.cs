@@ -26,6 +26,7 @@ public static class DeployConfigStore
         settings.Targets = (DeployTargets)config.GetValue("build", "targets", (long)settings.Targets).AsInt64();
         settings.ExportPreset = ReadString(config, "build", "export_preset", settings.ExportPreset);
         settings.ExportOutputPath = ReadString(config, "build", "export_output_path", settings.ExportOutputPath);
+        settings.BuildWithDebug = config.GetValue("build", "with_debug", settings.BuildWithDebug).AsBool();
 
         string legacySteamCmdPath = ReadString(config, "steam", "steamcmd_path", string.Empty);
         settings.SteamAppId = ReadString(config, "steam", "app_id", settings.SteamAppId);
@@ -64,6 +65,7 @@ public static class DeployConfigStore
         config.SetValue("build", "targets", (long)settings.Targets);
         config.SetValue("build", "export_preset", settings.ExportPreset);
         config.SetValue("build", "export_output_path", settings.ExportOutputPath);
+        config.SetValue("build", "with_debug", settings.BuildWithDebug);
 
         config.SetValue("steam", "app_id", settings.SteamAppId);
         config.SetValue("steam", "depot_id", settings.SteamDepotId);

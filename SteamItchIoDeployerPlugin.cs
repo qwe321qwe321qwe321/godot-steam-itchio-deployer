@@ -20,6 +20,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private EditorDock? _dock;
     private OptionButton? _preset;
     private LineEdit? _exportOutput;
+    private CheckBox? _buildWithDebug;
     private CheckBox? _steamEnabled;
     private LineEdit? _steamCmd;
     private LineEdit? _steamAppId;
@@ -91,6 +92,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _presetFileStamp = GetPresetFileStamp();
         AddRow(buildGrid, "Export Preset", _preset);
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
+        _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
         AddSection(root, "Steam");
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
@@ -340,8 +342,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
                 Directory.CreateDirectory(outputDirectory);
                 string godotExecutable = OS.GetExecutablePath();
-                var arguments = new[] { "--headless", "--path", projectPath, "--export-release", settings.ExportPreset, outputPath };
-                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' to {outputPath}");
+                string exportMode = settings.BuildWithDebug ? "--export-debug" : "--export-release";
+                var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, outputPath };
+                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}) to {outputPath}");
                 CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput).ConfigureAwait(false);
                 if (!result.Succeeded)
                 {
@@ -634,6 +637,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             Targets = targets,
             ExportPreset = _preset is { ItemCount: > 0 } ? _preset.GetItemText(_preset.Selected) : string.Empty,
             ExportOutputPath = _exportOutput?.Text.Trim() ?? string.Empty,
+            BuildWithDebug = _buildWithDebug?.ButtonPressed == true,
             SteamCmdPath = DeployConfigStore.PreferProjectRelativePath(_steamCmd?.Text ?? string.Empty),
             SteamAppId = _steamAppId?.Text.Trim() ?? string.Empty,
             SteamDepotId = _steamDepotId?.Text.Trim() ?? string.Empty,
@@ -910,6 +914,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
+        GD.Print($"{LogPrefix} BUILD_WITH_DEBUG={_buildWithDebug?.ButtonPressed}");
         GD.Print($"{LogPrefix} GUARD_PATTERN_MATCHES={CliProcessRunner.IsSteamGuardRequired("FAILED login with result code RequireTwoFactorCode")}");
 
         string missingPath = Path.Combine(

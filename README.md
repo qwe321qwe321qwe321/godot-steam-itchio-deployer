@@ -34,7 +34,7 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
 ## Configure
 
 1. Create an export preset under **Project > Export**. The plugin watches `export_presets.cfg` and refreshes the preset list while the editor remains open.
-2. Select the preset and set **Export Output File**, for example `build/windows/MyGame.exe`.
+2. Select the preset and set **Export Output File**, for example `build/windows/MyGame.exe`. Enable **Build With Debug** to use Godot's `--export-debug`; leave it disabled for `--export-release`.
 3. Select Steam and/or itch.io and fill in the corresponding fields.
    - **Download & Install** next to SteamCMD appears only when the configured path cannot resolve to an existing executable. It downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
    - **Download & Install** next to Butler appears only when the configured path cannot resolve to an existing executable. It downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
@@ -47,7 +47,7 @@ The export output is a file path because that is what Godot's export CLI require
 
 ## Workflows
 
-- **Build** runs the selected preset through `godot --headless --export-release`.
+- **Build** runs the selected preset through `godot --headless --export-debug` or `--export-release`, according to **Build With Debug**.
 - **Upload** uploads an existing output directory to the selected services.
 - **Build & Upload** exports once, then uploads to Steam followed by itch.io.
 
