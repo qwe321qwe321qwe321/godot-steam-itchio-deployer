@@ -51,6 +51,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private RichTextLabel? _log;
     private int _busy;
     private bool _quitAfterToolInstall;
+    private bool _guardUiProbePending;
     private string _presetFileStamp = string.Empty;
 
     public override void _EnterTree()
@@ -190,6 +191,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (HasProbeArgument())
         {
             OnProbeButtonPressed();
+            _guardUiProbePending = true;
+            _ = RequestSteamGuardCodeAsync("probe");
         }
 
         if (HasArgument("--deployer-install-steamcmd"))
@@ -216,6 +219,14 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         while (_pendingUiActions.TryDequeue(out Action? action))
         {
             action();
+        }
+
+        if (_guardUiProbePending)
+        {
+            _guardUiProbePending = false;
+            GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_REQUEST={_steamGuardPanel?.Visible}");
+            CancelSteamGuardCode();
+            GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_CANCEL={_steamGuardPanel?.Visible}");
         }
 
         RefreshPresetsIfChanged();
@@ -880,6 +891,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} STEAM_DOWNLOAD_VISIBLE={_steamDownloadButton?.Visible}");
         GD.Print($"{LogPrefix} BUTLER_DOWNLOAD_VISIBLE={_butlerDownloadButton?.Visible}");
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
+        GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
         GD.Print($"{LogPrefix} GUARD_PATTERN_MATCHES={CliProcessRunner.IsSteamGuardRequired("FAILED login with result code RequireTwoFactorCode")}");
 
