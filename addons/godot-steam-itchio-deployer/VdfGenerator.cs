@@ -11,7 +11,7 @@ public static class VdfGenerator
 {
     public static string Generate(DeploySettings settings, string contentRoot)
     {
-        string outputDirectory = ProjectSettings.GlobalizePath("user://godot-steam-itchio-deployer/steam-vdf");
+        string outputDirectory = ProjectSettings.GlobalizePath("res://.deployer/steam-vdf");
         Directory.CreateDirectory(outputDirectory);
 
         string depotPath = Path.Combine(outputDirectory, $"depot_build_{settings.SteamDepotId}.vdf");

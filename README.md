@@ -25,8 +25,10 @@ Run `dotnet build`, then enable **Godot Steam itch.io Deployer** under **Project
 1. Create an export preset under **Project > Export**. The plugin reads preset names from `export_presets.cfg`.
 2. Select the preset and set **Export Output File**, for example `build/windows/MyGame.exe`.
 3. Select Steam and/or itch.io and fill in the corresponding fields.
-4. Use **Save Settings** to write non-secret values to `res://deploy_config.cfg`.
-5. Optionally use **Save Encrypted Credentials**. Credentials are machine- and project-bound and saved under `user://godot-steam-itchio-deployer/credentials.cfg`, outside the repository. Steam Guard codes are never saved.
+   - **Download & Install** next to SteamCMD downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
+   - **Download & Install** next to Butler downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
+4. Use **Save Settings** to write shared non-secret values to `res://deploy_config.cfg`. Machine-specific SteamCMD and butler paths are stored separately at `res://.deployer/local_settings.cfg`.
+5. Optionally use **Save Encrypted Credentials**. Credentials are machine- and project-bound and saved at `res://.deployer/credentials.cfg`. Steam Guard codes are never saved.
 
 The export output is a file path because that is what Godot's export CLI requires. Uploads use the parent directory of that file as their content root.
 
@@ -36,9 +38,16 @@ The export output is a file path because that is what Godot's export CLI require
 - **Upload** uploads an existing output directory to the selected services.
 - **Build & Upload** exports once, then uploads to Steam followed by itch.io.
 
-Steam uploads generate app/depot VDF files under `user://godot-steam-itchio-deployer/steam-vdf` and invoke SteamCMD. itch.io uploads invoke `butler push` with `BUTLER_API_KEY` injected only into the child process environment.
+Steam uploads generate app/depot VDF files under `res://.deployer/steam-vdf` and invoke SteamCMD. itch.io uploads invoke `butler push` with `BUTLER_API_KEY` injected only into the child process environment.
 
 All child-process output is streamed into the shared log console.
+
+Automatically downloaded tools and local-only configuration live inside the Godot project under `res://.deployer/`. The entire directory must remain in `.gitignore`. SteamCMD automatic installation currently supports Windows. Butler automatic installation supports Windows, macOS, and Linux on x64/ARM64 when itch.io publishes the corresponding package.
+
+Official download sources:
+
+- SteamCMD: `https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip`
+- Butler broth channel: `https://broth.itch.zone/butler/<os>-<arch>/LATEST/archive/default`
 
 ## Automated EditorPlugin probe
 

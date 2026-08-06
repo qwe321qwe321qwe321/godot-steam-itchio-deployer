@@ -16,6 +16,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private const string LogPrefix = "[GodotSteamItchIoDeployer]";
 
     private readonly ConcurrentQueue<string> _pendingLogs = new();
+    private readonly ConcurrentQueue<Action> _pendingUiActions = new();
     private EditorDock? _dock;
     private OptionButton? _preset;
     private LineEdit? _exportOutput;
@@ -30,6 +31,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _steamUsername;
     private LineEdit? _steamPassword;
     private LineEdit? _steamGuard;
+    private Button? _steamDownloadButton;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
     private LineEdit? _itchTarget;
@@ -38,11 +40,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private CheckBox? _itchIfChanged;
     private LineEdit? _itchIgnore;
     private LineEdit? _butlerApiKey;
+    private Button? _butlerDownloadButton;
     private Button? _buildButton;
     private Button? _uploadButton;
     private Button? _buildUploadButton;
     private RichTextLabel? _log;
     private int _busy;
+    private bool _quitAfterToolInstall;
 
     public override void _EnterTree()
     {
@@ -85,7 +89,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
         root.AddChild(_steamEnabled);
         var steamGrid = CreateGrid(root);
-        _steamCmd = AddLineRow(steamGrid, "SteamCMD", settings.SteamCmdPath, "Full path to steamcmd.exe");
+        _steamCmd = AddToolPathRow(
+            steamGrid,
+            "SteamCMD",
+            settings.SteamCmdPath,
+            "Full path to steamcmd.exe",
+            () => StartToolInstall(DeployToolKind.SteamCmd),
+            out _steamDownloadButton);
         _steamAppId = AddLineRow(steamGrid, "App ID", settings.SteamAppId);
         _steamDepotId = AddLineRow(steamGrid, "Depot ID", settings.SteamDepotId);
         _steamDescription = AddLineRow(steamGrid, "Build Description", settings.SteamBuildDescription, "Supports {Date} and {DateTime}");
@@ -100,7 +110,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
         root.AddChild(_itchEnabled);
         var itchGrid = CreateGrid(root);
-        _butler = AddLineRow(itchGrid, "Butler", settings.ButlerPath, "Full path to butler executable");
+        _butler = AddToolPathRow(
+            itchGrid,
+            "Butler",
+            settings.ButlerPath,
+            "Full path to butler executable",
+            () => StartToolInstall(DeployToolKind.Butler),
+            out _butlerDownloadButton);
         _itchTarget = AddLineRow(itchGrid, "Target", settings.ItchTarget, "username/game");
         _itchChannel = AddLineRow(itchGrid, "Channel", settings.ItchChannel, "Example: windows");
         _itchVersion = AddLineRow(itchGrid, "User Version", settings.ItchUserVersion, "Optional");
@@ -145,6 +161,17 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             OnProbeButtonPressed();
         }
 
+        if (HasArgument("--deployer-install-steamcmd"))
+        {
+            _quitAfterToolInstall = true;
+            StartToolInstall(DeployToolKind.SteamCmd);
+        }
+        else if (HasArgument("--deployer-install-butler"))
+        {
+            _quitAfterToolInstall = true;
+            StartToolInstall(DeployToolKind.Butler);
+        }
+
         UpdateButtonState();
     }
 
@@ -153,6 +180,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         while (_pendingLogs.TryDequeue(out string? message))
         {
             AppendLog(message);
+        }
+
+        while (_pendingUiActions.TryDequeue(out Action? action))
+        {
+            action();
         }
 
         UpdateButtonState();
@@ -191,6 +223,55 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         AppendLog($"Starting {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
         _ = RunWorkflowAsync(settings, credentials, build, upload);
+    }
+
+    private void StartToolInstall(DeployToolKind tool)
+    {
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            AppendLog("Another deployment operation is already running.");
+            return;
+        }
+
+        AppendLog($"Starting {tool} download and install...");
+        _ = RunToolInstallAsync(tool);
+    }
+
+    private async Task RunToolInstallAsync(DeployToolKind tool)
+    {
+        try
+        {
+            string executablePath = await ToolInstaller.InstallAsync(tool, QueueProcessOutput).ConfigureAwait(false);
+            _pendingUiActions.Enqueue(() =>
+            {
+                LineEdit? field = tool == DeployToolKind.SteamCmd ? _steamCmd : _butler;
+                if (field is not null)
+                {
+                    field.Text = executablePath;
+                }
+
+                Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
+                AppendLog(error == Error.Ok
+                    ? $"{tool} path saved automatically."
+                    : $"{tool} installed, but settings could not be saved: {error}");
+                if (_quitAfterToolInstall)
+                {
+                    GetTree().Quit(error == Error.Ok ? 0 : 1);
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            _pendingLogs.Enqueue($"ERROR: {tool} installation failed: {exception.Message}");
+            if (_quitAfterToolInstall)
+            {
+                _pendingUiActions.Enqueue(() => GetTree().Quit(1));
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
     }
 
     private async Task RunWorkflowAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload)
@@ -392,6 +473,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
+        if (_steamDownloadButton is not null) _steamDownloadButton.Disabled = busy;
+        if (_butlerDownloadButton is not null) _butlerDownloadButton.Disabled = busy;
     }
 
     private void AppendLog(string message)
@@ -473,14 +556,39 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         return button;
     }
 
-    private static bool HasProbeArgument()
+    private static bool HasArgument(string expected)
     {
         foreach (string argument in OS.GetCmdlineUserArgs())
         {
-            if (argument == "--deployer-probe") return true;
+            if (argument == expected) return true;
         }
 
         return false;
+    }
+
+    private static bool HasProbeArgument() => HasArgument("--deployer-probe");
+
+    private static LineEdit AddToolPathRow(
+        GridContainer grid,
+        string label,
+        string value,
+        string placeholder,
+        Action downloadAction,
+        out Button downloadButton)
+    {
+        var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        var edit = new LineEdit
+        {
+            Text = value,
+            PlaceholderText = placeholder,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        row.AddChild(edit);
+        downloadButton = new Button { Text = "Download & Install" };
+        downloadButton.Pressed += downloadAction;
+        row.AddChild(downloadButton);
+        AddRow(grid, label, row);
+        return edit;
     }
 
     private static void OnProbeButtonPressed()
