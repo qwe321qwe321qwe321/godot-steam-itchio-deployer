@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -34,8 +35,10 @@ public static class CliProcessRunner
         string workingDirectory,
         IReadOnlyDictionary<string, string>? environment,
         Action<string> onOutput,
-        Func<string, bool>? terminateWhen = null)
+        Func<string, bool>? terminateWhen = null,
+        string? watchedOutputFile = null)
     {
+        long watchedFileOffset = GetFileLength(watchedOutputFile);
         var startInfo = new ProcessStartInfo
         {
             FileName = executablePath,
@@ -89,10 +92,95 @@ public static class CliProcessRunner
         }
 
         var combined = new StringBuilder();
+        using var watcherCancellation = new CancellationTokenSource();
         Task stdout = PumpAsync(process.StandardOutput, combined, onOutput, terminateWhen, TerminateProcess);
         Task stderr = PumpAsync(process.StandardError, combined, onOutput, terminateWhen, TerminateProcess);
+        Task watchedOutput = WatchOutputFileAsync(
+            watchedOutputFile,
+            watchedFileOffset,
+            terminateWhen,
+            TerminateProcess,
+            watcherCancellation.Token);
         await Task.WhenAll(process.WaitForExitAsync(), stdout, stderr).ConfigureAwait(false);
+        watcherCancellation.Cancel();
+        await watchedOutput.ConfigureAwait(false);
         return new CliProcessResult(process.ExitCode, combined.ToString(), Volatile.Read(ref terminatedByPattern) != 0);
+    }
+
+    private static async Task WatchOutputFileAsync(
+        string? path,
+        long offset,
+        Func<string, bool>? terminateWhen,
+        Action terminateProcess,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(path) || terminateWhen is null)
+        {
+            return;
+        }
+
+        var recentOutput = new StringBuilder();
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                if (File.Exists(path))
+                {
+                    var info = new FileInfo(path);
+                    if (info.Length < offset)
+                    {
+                        offset = 0;
+                        recentOutput.Clear();
+                    }
+
+                    if (info.Length > offset)
+                    {
+                        await using var stream = new FileStream(
+                            path,
+                            FileMode.Open,
+                            FileAccess.Read,
+                            FileShare.ReadWrite | FileShare.Delete);
+                        stream.Seek(offset, SeekOrigin.Begin);
+                        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+                        string appended = await reader.ReadToEndAsync(cancellationToken).ConfigureAwait(false);
+                        offset = stream.Position;
+                        recentOutput.Append(appended);
+                        if (recentOutput.Length > 8192)
+                        {
+                            recentOutput.Remove(0, recentOutput.Length - 8192);
+                        }
+
+                        if (terminateWhen(recentOutput.ToString()))
+                        {
+                            terminateProcess();
+                            return;
+                        }
+                    }
+                }
+
+                await Task.Delay(100, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Normal shutdown after the child process exits.
+        }
+        catch (IOException)
+        {
+            // SteamCMD may briefly rotate or lock its log. stdout/stderr monitoring remains active.
+        }
+    }
+
+    private static long GetFileLength(string? path)
+    {
+        try
+        {
+            return !string.IsNullOrWhiteSpace(path) && File.Exists(path) ? new FileInfo(path).Length : 0;
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
     }
 
     private static async Task PumpAsync(

@@ -483,7 +483,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 workingDirectory,
                 null,
                 QueueProcessOutput,
-                CliProcessRunner.IsSteamGuardRequired).ConfigureAwait(false);
+                CliProcessRunner.IsSteamGuardRequired,
+                GetSteamConsoleLogPath(executable)).ConfigureAwait(false);
             if (!result.TerminatedByOutputPattern)
             {
                 return result;
@@ -500,6 +501,14 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
 
         throw new InvalidOperationException("Steam Guard verification did not complete.");
+    }
+
+    private static string GetSteamConsoleLogPath(string steamCmdExecutable)
+    {
+        string? steamCmdDirectory = Path.GetDirectoryName(steamCmdExecutable);
+        return string.IsNullOrWhiteSpace(steamCmdDirectory)
+            ? string.Empty
+            : Path.Combine(steamCmdDirectory, "logs", "console_log.txt");
     }
 
     private Task<string?> RequestSteamGuardCodeAsync(string operationName)
