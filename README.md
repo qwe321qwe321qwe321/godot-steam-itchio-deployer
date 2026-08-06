@@ -36,8 +36,8 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
 1. Create an export preset under **Project > Export**. The plugin reads preset names from `export_presets.cfg`.
 2. Select the preset and set **Export Output File**, for example `build/windows/MyGame.exe`.
 3. Select Steam and/or itch.io and fill in the corresponding fields.
-   - **Download & Install** next to SteamCMD downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
-   - **Download & Install** next to Butler downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
+   - **Download & Install** next to SteamCMD appears only when the configured path cannot resolve to an existing executable. It downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
+   - **Download & Install** next to Butler appears only when the configured path cannot resolve to an existing executable. It downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
 4. Use **Save Settings** to write shared non-secret values to `res://deploy_config.cfg`. Machine-specific SteamCMD and butler paths are stored separately at `res://.deployer/local_settings.cfg`.
 5. Optionally use **Save Encrypted Credentials**. Credentials are machine- and project-bound and saved at `res://.deployer/credentials.cfg`. Steam Guard codes are never saved.
 

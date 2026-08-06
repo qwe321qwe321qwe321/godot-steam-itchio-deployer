@@ -347,7 +347,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Require(settings.SteamDepotId, "Steam Depot ID");
         Require(credentials.SteamUsername, "Steam username");
         Require(credentials.SteamPassword, "Steam password");
-        string executable = ResolveExecutable(settings.SteamCmdPath, "SteamCMD");
+        string executable = ResolveExecutable(settings.SteamCmdPath, "SteamCMD", DeployToolKind.SteamCmd);
         string vdfPath = VdfGenerator.Generate(settings, contentRoot);
         var arguments = new List<string>();
         if (!string.IsNullOrWhiteSpace(credentials.SteamGuardCode))
@@ -377,7 +377,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Require(settings.ItchTarget, "itch.io target");
         Require(settings.ItchChannel, "itch.io channel");
         Require(credentials.ButlerApiKey, "Butler API key");
-        string executable = ResolveExecutable(settings.ButlerPath, "butler");
+        string executable = ResolveExecutable(settings.ButlerPath, "butler", DeployToolKind.Butler);
         var arguments = new List<string> { "push", contentRoot, $"{settings.ItchTarget}:{settings.ItchChannel}" };
         if (!string.IsNullOrWhiteSpace(settings.ItchUserVersion))
         {
@@ -473,8 +473,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
-        if (_steamDownloadButton is not null) _steamDownloadButton.Disabled = busy;
-        if (_butlerDownloadButton is not null) _butlerDownloadButton.Disabled = busy;
+        if (_steamDownloadButton is not null)
+        {
+            bool missing = !TryResolveExecutablePath(_steamCmd?.Text, DeployToolKind.SteamCmd, out _);
+            _steamDownloadButton.Visible = missing;
+            _steamDownloadButton.Disabled = busy;
+        }
+
+        if (_butlerDownloadButton is not null)
+        {
+            bool missing = !TryResolveExecutablePath(_butler?.Text, DeployToolKind.Butler, out _);
+            _butlerDownloadButton.Visible = missing;
+            _butlerDownloadButton.Disabled = busy;
+        }
     }
 
     private void AppendLog(string message)
@@ -491,17 +502,66 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         return Path.GetFullPath(Path.IsPathRooted(path) ? path : Path.Combine(projectPath, path));
     }
 
-    private static string ResolveExecutable(string configuredPath, string displayName)
+    private static string ResolveExecutable(string configuredPath, string displayName, DeployToolKind tool)
     {
         Require(configuredPath, displayName + " path");
-        string path = Path.GetFullPath(configuredPath);
-        if (File.Exists(path)) return path;
-        if (OperatingSystem.IsWindows() && !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && File.Exists(path + ".exe"))
+        if (TryResolveExecutablePath(configuredPath, tool, out string executablePath))
         {
-            return path + ".exe";
+            return executablePath;
         }
 
-        throw new FileNotFoundException($"{displayName} executable not found: {path}");
+        throw new FileNotFoundException($"{displayName} executable not found at configured path: {configuredPath}");
+    }
+
+    private static bool TryResolveExecutablePath(string? configuredPath, DeployToolKind tool, out string executablePath)
+    {
+        executablePath = string.Empty;
+        if (string.IsNullOrWhiteSpace(configuredPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            string path = Path.GetFullPath(configuredPath.Trim());
+            if (File.Exists(path))
+            {
+                executablePath = path;
+                return true;
+            }
+
+            string executableName = tool switch
+            {
+                DeployToolKind.SteamCmd when OperatingSystem.IsWindows() => "steamcmd.exe",
+                DeployToolKind.SteamCmd => "steamcmd.sh",
+                DeployToolKind.Butler when OperatingSystem.IsWindows() => "butler.exe",
+                _ => "butler",
+            };
+
+            if (Directory.Exists(path))
+            {
+                string directoryCandidate = Path.Combine(path, executableName);
+                if (File.Exists(directoryCandidate))
+                {
+                    executablePath = directoryCandidate;
+                    return true;
+                }
+            }
+
+            if (OperatingSystem.IsWindows() &&
+                !path.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
+                File.Exists(path + ".exe"))
+            {
+                executablePath = path + ".exe";
+                return true;
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static void Require(string value, string field)
@@ -591,9 +651,18 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         return edit;
     }
 
-    private static void OnProbeButtonPressed()
+    private void OnProbeButtonPressed()
     {
+        UpdateButtonState();
         GD.Print($"{LogPrefix} PROBE_BUTTON_PRESSED");
+        GD.Print($"{LogPrefix} STEAM_DOWNLOAD_VISIBLE={_steamDownloadButton?.Visible}");
+        GD.Print($"{LogPrefix} BUTLER_DOWNLOAD_VISIBLE={_butlerDownloadButton?.Visible}");
+
+        string missingPath = Path.Combine(
+            ProjectSettings.GlobalizePath("res://.deployer/tools"),
+            "probe-definitely-missing");
+        GD.Print($"{LogPrefix} MISSING_STEAMCMD_RESOLVES={TryResolveExecutablePath(missingPath, DeployToolKind.SteamCmd, out _)}");
+        GD.Print($"{LogPrefix} MISSING_BUTLER_RESOLVES={TryResolveExecutablePath(missingPath, DeployToolKind.Butler, out _)}");
     }
 }
 #endif
