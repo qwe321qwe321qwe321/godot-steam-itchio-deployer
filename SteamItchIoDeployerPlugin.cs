@@ -164,7 +164,266 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (HasArgument("--deployer-install-steamcmd"))
         {
             _quitAfterToolInstall = true;
-            StartToolInstal…2558 tokens truncated…true) targets |= DeployTargets.ItchIo;
+            StartToolInstall(DeployToolKind.SteamCmd);
+        }
+        else if (HasArgument("--deployer-install-butler"))
+        {
+            _quitAfterToolInstall = true;
+            StartToolInstall(DeployToolKind.Butler);
+        }
+
+        UpdateButtonState();
+    }
+
+    public override void _Process(double delta)
+    {
+        while (_pendingLogs.TryDequeue(out string? message))
+        {
+            AppendLog(message);
+        }
+
+        while (_pendingUiActions.TryDequeue(out Action? action))
+        {
+            action();
+        }
+
+        UpdateButtonState();
+    }
+
+    public override void _ExitTree()
+    {
+        SetProcess(false);
+        if (_dock is not null && IsInstanceValid(_dock))
+        {
+            RemoveDock(_dock);
+            _dock.QueueFree();
+        }
+
+        _dock = null;
+        _log = null;
+    }
+
+    private void StartWorkflow(bool build, bool upload)
+    {
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            AppendLog("Another deployment operation is already running.");
+            return;
+        }
+
+        DeploySettings settings = ReadSettingsFromUi();
+        DeployCredentials credentials = ReadCredentialsFromUi();
+        Error saveError = DeployConfigStore.SaveSettings(settings);
+        if (saveError != Error.Ok)
+        {
+            Interlocked.Exchange(ref _busy, 0);
+            AppendLog($"Could not save settings: {saveError}");
+            return;
+        }
+
+        AppendLog($"Starting {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
+        _ = RunWorkflowAsync(settings, credentials, build, upload);
+    }
+
+    private void StartToolInstall(DeployToolKind tool)
+    {
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            AppendLog("Another deployment operation is already running.");
+            return;
+        }
+
+        AppendLog($"Starting {tool} download and install...");
+        _ = RunToolInstallAsync(tool);
+    }
+
+    private async Task RunToolInstallAsync(DeployToolKind tool)
+    {
+        try
+        {
+            string executablePath = await ToolInstaller.InstallAsync(tool, QueueProcessOutput).ConfigureAwait(false);
+            _pendingUiActions.Enqueue(() =>
+            {
+                LineEdit? field = tool == DeployToolKind.SteamCmd ? _steamCmd : _butler;
+                if (field is not null)
+                {
+                    field.Text = executablePath;
+                }
+
+                Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
+                AppendLog(error == Error.Ok
+                    ? $"{tool} path saved automatically."
+                    : $"{tool} installed, but settings could not be saved: {error}");
+                if (_quitAfterToolInstall)
+                {
+                    GetTree().Quit(error == Error.Ok ? 0 : 1);
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            _pendingLogs.Enqueue($"ERROR: {tool} installation failed: {exception.Message}");
+            if (_quitAfterToolInstall)
+            {
+                _pendingUiActions.Enqueue(() => GetTree().Quit(1));
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task RunWorkflowAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload)
+    {
+        try
+        {
+            string projectPath = ProjectSettings.GlobalizePath("res://");
+            string outputPath = ResolveProjectPath(settings.ExportOutputPath, projectPath);
+            string? outputDirectory = Path.GetDirectoryName(outputPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                throw new InvalidOperationException("Export output must include a file name.");
+            }
+
+            if (build)
+            {
+                if (string.IsNullOrWhiteSpace(settings.ExportPreset))
+                {
+                    throw new InvalidOperationException("Select a Godot export preset before building.");
+                }
+
+                Directory.CreateDirectory(outputDirectory);
+                string godotExecutable = OS.GetExecutablePath();
+                var arguments = new[] { "--headless", "--path", projectPath, "--export-release", settings.ExportPreset, outputPath };
+                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' to {outputPath}");
+                CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput).ConfigureAwait(false);
+                if (!result.Succeeded)
+                {
+                    throw new InvalidOperationException($"Godot export failed with exit code {result.ExitCode}.");
+                }
+
+                _pendingLogs.Enqueue("Build completed.");
+            }
+
+            if (upload)
+            {
+                if (!Directory.Exists(outputDirectory))
+                {
+                    throw new DirectoryNotFoundException($"Upload directory does not exist: {outputDirectory}");
+                }
+
+                if (settings.Targets == DeployTargets.None)
+                {
+                    throw new InvalidOperationException("Select Steam and/or itch.io before uploading.");
+                }
+
+                if (settings.Targets.HasFlag(DeployTargets.Steam))
+                {
+                    await UploadSteamAsync(settings, credentials, outputDirectory, projectPath).ConfigureAwait(false);
+                }
+
+                if (settings.Targets.HasFlag(DeployTargets.ItchIo))
+                {
+                    await UploadItchAsync(settings, credentials, outputDirectory, projectPath).ConfigureAwait(false);
+                }
+            }
+
+            _pendingLogs.Enqueue("Workflow completed successfully.");
+        }
+        catch (Exception exception)
+        {
+            _pendingLogs.Enqueue($"ERROR: {exception.Message}");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task UploadSteamAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory)
+    {
+        Require(settings.SteamAppId, "Steam App ID");
+        Require(settings.SteamDepotId, "Steam Depot ID");
+        Require(credentials.SteamUsername, "Steam username");
+        Require(credentials.SteamPassword, "Steam password");
+        string executable = ResolveExecutable(settings.SteamCmdPath, "SteamCMD");
+        string vdfPath = VdfGenerator.Generate(settings, contentRoot);
+        var arguments = new List<string>();
+        if (!string.IsNullOrWhiteSpace(credentials.SteamGuardCode))
+        {
+            arguments.Add("+set_steam_guard_code");
+            arguments.Add(credentials.SteamGuardCode.Trim());
+        }
+
+        arguments.Add("+login");
+        arguments.Add(credentials.SteamUsername);
+        arguments.Add(credentials.SteamPassword);
+        arguments.Add("+run_app_build");
+        arguments.Add(vdfPath);
+        arguments.Add("+quit");
+        _pendingLogs.Enqueue("Uploading to Steam...");
+        CliProcessResult result = await CliProcessRunner.RunAsync(executable, arguments, workingDirectory, null, QueueProcessOutput).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"SteamCMD failed with exit code {result.ExitCode}.");
+        }
+
+        _pendingLogs.Enqueue("Steam upload completed.");
+    }
+
+    private async Task UploadItchAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory)
+    {
+        Require(settings.ItchTarget, "itch.io target");
+        Require(settings.ItchChannel, "itch.io channel");
+        Require(credentials.ButlerApiKey, "Butler API key");
+        string executable = ResolveExecutable(settings.ButlerPath, "butler");
+        var arguments = new List<string> { "push", contentRoot, $"{settings.ItchTarget}:{settings.ItchChannel}" };
+        if (!string.IsNullOrWhiteSpace(settings.ItchUserVersion))
+        {
+            arguments.Add("--userversion");
+            arguments.Add(VdfGenerator.ResolveMacros(settings.ItchUserVersion));
+        }
+
+        if (settings.ItchIfChanged)
+        {
+            arguments.Add("--if-changed");
+        }
+
+        foreach (string pattern in VdfGenerator.SplitPatterns(settings.ItchIgnoreFiles))
+        {
+            arguments.Add("--ignore");
+            arguments.Add(pattern);
+        }
+
+        var environment = new Dictionary<string, string> { ["BUTLER_API_KEY"] = credentials.ButlerApiKey };
+        _pendingLogs.Enqueue("Uploading to itch.io...");
+        CliProcessResult result = await CliProcessRunner.RunAsync(executable, arguments, workingDirectory, environment, QueueProcessOutput).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            throw new InvalidOperationException($"butler failed with exit code {result.ExitCode}.");
+        }
+
+        _pendingLogs.Enqueue("itch.io upload completed.");
+    }
+
+    private void SaveSettingsPressed()
+    {
+        Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
+        AppendLog(error == Error.Ok ? $"Settings saved to {DeployConfigStore.SettingsPath}." : $"Could not save settings: {error}");
+    }
+
+    private void SaveCredentialsPressed()
+    {
+        Error error = DeployConfigStore.SaveCredentials(ReadCredentialsFromUi());
+        AppendLog(error == Error.Ok ? $"Credentials saved encrypted at {DeployConfigStore.CredentialsPath}." : $"Could not save credentials: {error}");
+    }
+
+    private DeploySettings ReadSettingsFromUi()
+    {
+        DeployTargets targets = DeployTargets.None;
+        if (_steamEnabled?.ButtonPressed == true) targets |= DeployTargets.Steam;
+        if (_itchEnabled?.ButtonPressed == true) targets |= DeployTargets.ItchIo;
         return new DeploySettings
         {
             Targets = targets,
