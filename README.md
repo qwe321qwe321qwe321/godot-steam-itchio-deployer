@@ -12,13 +12,24 @@ Godot 4.7 .NET editor plugin that exports once and uploads the resulting directo
 
 ## Install in a Godot C# project
 
-Copy this directory into the target project:
+For a private/internal project, add this repository as a submodule at the standard Godot addon path:
 
-```text
-addons/godot-steam-itchio-deployer/
+```powershell
+git submodule add https://github.com/qwe321qwe321qwe321/godot-steam-itchio-deployer.git addons/godot-steam-itchio-deployer
+git submodule update --init --recursive
 ```
 
 Run `dotnet build`, then enable **Godot Steam itch.io Deployer** under **Project > Project Settings > Plugins**. A **Deployer** dock appears at the bottom of the editor.
+
+The parent repository pins an exact addon commit. Update deliberately with:
+
+```powershell
+git submodule update --remote --merge addons/godot-steam-itchio-deployer
+```
+
+Then test and commit the updated submodule pointer in the parent project. Fresh clones must use `git clone --recurse-submodules` or run the initialization command above.
+
+For release ZIP or Godot Asset Library distribution, package this repository so its root is extracted as `addons/godot-steam-itchio-deployer/`.
 
 ## Configure
 
@@ -51,10 +62,12 @@ Official download sources:
 
 ## Automated EditorPlugin probe
 
+Run this from a consuming Godot project after adding the submodule:
+
 ```powershell
 dotnet build
 & 'C:\Users\PeDev\AppData\Roaming\godotenv\godot\versions\godot_dotnet_4_7_1_stable\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe' `
-  --path . --editor --headless --quit-after 10 -- --deployer-probe
+  --path <consumer-project> --editor --headless --quit-after 10 -- --deployer-probe
 ```
 
 A successful run prints:
