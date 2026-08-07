@@ -101,9 +101,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         root.AddChild(new Label { Text = "Godot Steam / itch.io Deployer" });
         root.AddChild(new Label { Text = "Build once, then upload the exported directory to the selected services." });
 
+        var buildConfigGrid = CreateGrid(root);
+        _buildConfigPicker = AddResourceRow<BuildDeployConfig>(buildConfigGrid, "Build / Deploy Config", _buildConfig);
+
         VBoxContainer buildContent = AddFoldoutSection(root, "Build", out _buildFoldoutButton);
         var resourceGrid = CreateGrid(buildContent);
-        _buildConfigPicker = AddResourceRow<BuildDeployConfig>(resourceGrid, "Build / Deploy Config", _buildConfig);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
         _buildConfigPicker.ResourceChanged += OnBuildConfigChanged;
