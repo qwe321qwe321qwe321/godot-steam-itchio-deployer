@@ -10,122 +10,114 @@ namespace GodotSteamItchIoDeployer;
 
 public static class DeployConfigStore
 {
-    public const string SettingsPath = "res://deploy_config.cfg";
+    public const string DefaultBuildConfigPath = "res://deploy/BuildDeployConfig.tres";
+    public const string DefaultSteamConfigPath = "res://deploy/SteamDeployConfig.tres";
+    public const string DefaultItchConfigPath = "res://deploy/ItchIoDeployConfig.tres";
+    public const string LegacySettingsPath = "res://deploy_config.cfg";
     public const string LocalSettingsPath = "res://.deployer/local_settings.cfg";
     public const string CredentialsPath = "res://.deployer/credentials.cfg";
 
-    public static DeploySettings LoadSettings()
+    public static BuildDeployConfig LoadOrCreateBuildConfig()
     {
-        var settings = new DeploySettings();
-        var config = new ConfigFile();
-        if (config.Load(SettingsPath) != Error.Ok)
+        string selectedPath = LoadSelectedBuildConfigPath();
+        BuildDeployConfig? buildConfig = ResourceLoader.Exists(selectedPath)
+            ? ResourceLoader.Load<BuildDeployConfig>(selectedPath, cacheMode: ResourceLoader.CacheMode.Replace)
+            : null;
+        if (buildConfig is not null)
         {
-            return settings;
+            EnsureNestedConfigs(buildConfig);
+            return buildConfig;
         }
 
-        settings.Targets = (DeployTargets)config.GetValue("build", "targets", (long)settings.Targets).AsInt64();
-        settings.ExportPreset = ReadString(config, "build", "export_preset", settings.ExportPreset);
-        settings.ExportOutputPath = ReadString(config, "build", "export_output_path", settings.ExportOutputPath);
-        settings.BuildWithDebug = config.GetValue("build", "with_debug", settings.BuildWithDebug).AsBool();
-
-        string legacySteamCmdPath = ReadString(config, "steam", "steamcmd_path", string.Empty);
-        settings.SteamAppId = ReadString(config, "steam", "app_id", settings.SteamAppId);
-        settings.SteamDepotId = ReadString(config, "steam", "depot_id", settings.SteamDepotId);
-        settings.SteamBuildDescription = ReadString(config, "steam", "build_description", settings.SteamBuildDescription);
-        settings.SteamSetLive = config.GetValue("steam", "set_live", settings.SteamSetLive).AsBool();
-        settings.SteamBranch = ReadString(config, "steam", "branch", settings.SteamBranch);
-        settings.SteamIgnoreFiles = ReadString(config, "steam", "ignore_files", settings.SteamIgnoreFiles);
-
-        string legacyButlerPath = ReadString(config, "itch", "butler_path", string.Empty);
-        settings.ItchTarget = ReadString(config, "itch", "target", settings.ItchTarget);
-        settings.ItchChannel = ReadString(config, "itch", "channel", settings.ItchChannel);
-        settings.ItchUserVersion = ReadString(config, "itch", "user_version", settings.ItchUserVersion);
-        settings.ItchIfChanged = config.GetValue("itch", "if_changed", settings.ItchIfChanged).AsBool();
-        settings.ItchIgnoreFiles = ReadString(config, "itch", "ignore_files", settings.ItchIgnoreFiles);
-
-        var localConfig = new ConfigFile();
-        if (localConfig.Load(LocalSettingsPath) == Error.Ok)
+        DeploySettings legacy = LoadLegacySettings();
+        var steamConfig = new SteamDeployConfig();
+        var itchConfig = new ItchIoDeployConfig();
+        buildConfig = new BuildDeployConfig
         {
-            settings.SteamCmdPath = PreferProjectRelativePath(ReadString(localConfig, "tools", "steamcmd_path", string.Empty));
-            settings.ButlerPath = PreferProjectRelativePath(ReadString(localConfig, "tools", "butler_path", string.Empty));
-        }
-        else if (!string.IsNullOrWhiteSpace(legacySteamCmdPath) || !string.IsNullOrWhiteSpace(legacyButlerPath))
-        {
-            settings.SteamCmdPath = PreferProjectRelativePath(legacySteamCmdPath);
-            settings.ButlerPath = PreferProjectRelativePath(legacyButlerPath);
-            SaveSettings(settings);
-        }
+            SteamConfig = steamConfig,
+            ItchIoConfig = itchConfig,
+        };
+        ApplySettings(legacy, buildConfig);
 
-        return settings;
+        EnsureResourceDirectory(DefaultBuildConfigPath);
+        ResourceSaver.Save(steamConfig, DefaultSteamConfigPath);
+        ResourceSaver.Save(itchConfig, DefaultItchConfigPath);
+        ResourceSaver.Save(buildConfig, DefaultBuildConfigPath);
+        SaveSelectedBuildConfigPath(DefaultBuildConfigPath);
+        return buildConfig;
     }
 
-    public static Error SaveSettings(DeploySettings settings)
+    public static DeploySettings ToSettings(BuildDeployConfig buildConfig)
     {
-        var config = new ConfigFile();
-        config.SetValue("build", "targets", (long)settings.Targets);
-        config.SetValue("build", "export_preset", settings.ExportPreset);
-        config.SetValue("build", "export_output_path", settings.ExportOutputPath);
-        config.SetValue("build", "with_debug", settings.BuildWithDebug);
-
-        config.SetValue("steam", "app_id", settings.SteamAppId);
-        config.SetValue("steam", "depot_id", settings.SteamDepotId);
-        config.SetValue("steam", "build_description", settings.SteamBuildDescription);
-        config.SetValue("steam", "set_live", settings.SteamSetLive);
-        config.SetValue("steam", "branch", settings.SteamBranch);
-        config.SetValue("steam", "ignore_files", settings.SteamIgnoreFiles);
-
-        config.SetValue("itch", "target", settings.ItchTarget);
-        config.SetValue("itch", "channel", settings.ItchChannel);
-        config.SetValue("itch", "user_version", settings.ItchUserVersion);
-        config.SetValue("itch", "if_changed", settings.ItchIfChanged);
-        config.SetValue("itch", "ignore_files", settings.ItchIgnoreFiles);
-        Error sharedError = config.Save(SettingsPath);
-        if (sharedError != Error.Ok)
+        EnsureNestedConfigs(buildConfig);
+        SteamDeployConfig steam = buildConfig.SteamConfig!;
+        ItchIoDeployConfig itch = buildConfig.ItchIoConfig!;
+        return new DeploySettings
         {
-            return sharedError;
-        }
+            Targets = buildConfig.Targets,
+            ExportPreset = buildConfig.ExportPreset,
+            ExportOutputPath = buildConfig.ExportOutputPath,
+            BuildWithDebug = buildConfig.BuildWithDebug,
+            SteamCmdPath = PreferProjectRelativePath(steam.SteamCmdPath),
+            SteamAppId = steam.AppId,
+            SteamDepotId = steam.DepotId,
+            SteamBuildDescription = steam.BuildDescription,
+            SteamSetLive = steam.SetLive,
+            SteamBranch = steam.Branch,
+            SteamIgnoreFiles = steam.IgnoreFiles,
+            ButlerPath = PreferProjectRelativePath(itch.ButlerPath),
+            ItchTarget = itch.Target,
+            ItchChannel = itch.Channel,
+            ItchUserVersion = itch.UserVersion,
+            ItchIfChanged = itch.IfChanged,
+            ItchIgnoreFiles = itch.IgnoreFiles,
+        };
+    }
 
-        string localAbsolutePath = ProjectSettings.GlobalizePath(LocalSettingsPath);
-        string? localDirectory = Path.GetDirectoryName(localAbsolutePath);
-        if (!string.IsNullOrWhiteSpace(localDirectory))
-        {
-            Directory.CreateDirectory(localDirectory);
-        }
+    public static Error SaveSettings(DeploySettings settings, BuildDeployConfig buildConfig)
+    {
+        EnsureNestedConfigs(buildConfig);
+        ApplySettings(settings, buildConfig);
 
+        Error steamError = SaveResource(buildConfig.SteamConfig!, DefaultSteamConfigPath);
+        if (steamError != Error.Ok) return steamError;
+        Error itchError = SaveResource(buildConfig.ItchIoConfig!, DefaultItchConfigPath);
+        if (itchError != Error.Ok) return itchError;
+        Error buildError = SaveResource(buildConfig, DefaultBuildConfigPath);
+        if (buildError != Error.Ok) return buildError;
+
+        SaveSelectedBuildConfigPath(buildConfig.ResourcePath);
+        return Error.Ok;
+    }
+
+    public static void SaveSelectedBuildConfigPath(string path)
+    {
+        EnsureResourceDirectory(LocalSettingsPath);
         var localConfig = new ConfigFile();
-        localConfig.SetValue("tools", "steamcmd_path", PreferProjectRelativePath(settings.SteamCmdPath));
-        localConfig.SetValue("tools", "butler_path", PreferProjectRelativePath(settings.ButlerPath));
-        return localConfig.Save(LocalSettingsPath);
+        localConfig.Load(LocalSettingsPath);
+        localConfig.SetValue("resources", "selected_build_config", path);
+        localConfig.Save(LocalSettingsPath);
+    }
+
+    public static void EnsureNestedConfigs(BuildDeployConfig buildConfig)
+    {
+        buildConfig.SteamConfig ??= new SteamDeployConfig();
+        buildConfig.ItchIoConfig ??= new ItchIoDeployConfig();
     }
 
     public static string ResolveProjectPath(string configuredPath)
     {
-        if (string.IsNullOrWhiteSpace(configuredPath))
-        {
-            return string.Empty;
-        }
-
+        if (string.IsNullOrWhiteSpace(configuredPath)) return string.Empty;
         string path = configuredPath.Trim();
         if (path.StartsWith("res://", StringComparison.OrdinalIgnoreCase))
-        {
             return Path.GetFullPath(ProjectSettings.GlobalizePath(path));
-        }
-
-        if (Path.IsPathRooted(path))
-        {
-            return Path.GetFullPath(path);
-        }
-
+        if (Path.IsPathRooted(path)) return Path.GetFullPath(path);
         return Path.GetFullPath(Path.Combine(GetProjectRoot(), path));
     }
 
     public static string PreferProjectRelativePath(string configuredPath)
     {
-        if (string.IsNullOrWhiteSpace(configuredPath))
-        {
-            return string.Empty;
-        }
-
+        if (string.IsNullOrWhiteSpace(configuredPath)) return string.Empty;
         try
         {
             string absolutePath = ResolveProjectPath(configuredPath);
@@ -133,9 +125,7 @@ public static class DeployConfigStore
             bool outsideProject = relativePath == ".." ||
                                   relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
                                   Path.IsPathRooted(relativePath);
-            return outsideProject
-                ? absolutePath.Replace('\\', '/')
-                : relativePath.Replace('\\', '/');
+            return outsideProject ? absolutePath.Replace('\\', '/') : relativePath.Replace('\\', '/');
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -147,11 +137,7 @@ public static class DeployConfigStore
     {
         var credentials = new DeployCredentials();
         var config = new ConfigFile();
-        if (config.LoadEncryptedPass(CredentialsPath, DeriveMachinePassword()) != Error.Ok)
-        {
-            return credentials;
-        }
-
+        if (config.LoadEncryptedPass(CredentialsPath, DeriveMachinePassword()) != Error.Ok) return credentials;
         credentials.SteamUsername = ReadString(config, "steam", "username", string.Empty);
         credentials.SteamPassword = ReadString(config, "steam", "password", string.Empty);
         credentials.ButlerApiKey = ReadString(config, "itch", "api_key", string.Empty);
@@ -160,13 +146,7 @@ public static class DeployConfigStore
 
     public static Error SaveCredentials(DeployCredentials credentials)
     {
-        string absolutePath = ProjectSettings.GlobalizePath(CredentialsPath);
-        string? directory = Path.GetDirectoryName(absolutePath);
-        if (!string.IsNullOrWhiteSpace(directory))
-        {
-            Directory.CreateDirectory(directory);
-        }
-
+        EnsureResourceDirectory(CredentialsPath);
         var config = new ConfigFile();
         config.SetValue("steam", "username", credentials.SteamUsername);
         config.SetValue("steam", "password", credentials.SteamPassword);
@@ -174,10 +154,89 @@ public static class DeployConfigStore
         return config.SaveEncryptedPass(CredentialsPath, DeriveMachinePassword());
     }
 
-    private static string ReadString(ConfigFile config, string section, string key, string fallback)
+    private static DeploySettings LoadLegacySettings()
     {
-        return config.GetValue(section, key, fallback).AsString();
+        var settings = new DeploySettings();
+        var config = new ConfigFile();
+        if (config.Load(LegacySettingsPath) == Error.Ok)
+        {
+            settings.Targets = (DeployTargets)config.GetValue("build", "targets", (long)settings.Targets).AsInt64();
+            settings.ExportPreset = ReadString(config, "build", "export_preset", settings.ExportPreset);
+            settings.ExportOutputPath = ReadString(config, "build", "export_output_path", settings.ExportOutputPath);
+            settings.BuildWithDebug = config.GetValue("build", "with_debug", settings.BuildWithDebug).AsBool();
+            settings.SteamCmdPath = ReadString(config, "steam", "steamcmd_path", settings.SteamCmdPath);
+            settings.SteamAppId = ReadString(config, "steam", "app_id", settings.SteamAppId);
+            settings.SteamDepotId = ReadString(config, "steam", "depot_id", settings.SteamDepotId);
+            settings.SteamBuildDescription = ReadString(config, "steam", "build_description", settings.SteamBuildDescription);
+            settings.SteamSetLive = config.GetValue("steam", "set_live", settings.SteamSetLive).AsBool();
+            settings.SteamBranch = ReadString(config, "steam", "branch", settings.SteamBranch);
+            settings.SteamIgnoreFiles = ReadString(config, "steam", "ignore_files", settings.SteamIgnoreFiles);
+            settings.ButlerPath = ReadString(config, "itch", "butler_path", settings.ButlerPath);
+            settings.ItchTarget = ReadString(config, "itch", "target", settings.ItchTarget);
+            settings.ItchChannel = ReadString(config, "itch", "channel", settings.ItchChannel);
+            settings.ItchUserVersion = ReadString(config, "itch", "user_version", settings.ItchUserVersion);
+            settings.ItchIfChanged = config.GetValue("itch", "if_changed", settings.ItchIfChanged).AsBool();
+            settings.ItchIgnoreFiles = ReadString(config, "itch", "ignore_files", settings.ItchIgnoreFiles);
+        }
+
+        var localConfig = new ConfigFile();
+        if (localConfig.Load(LocalSettingsPath) == Error.Ok)
+        {
+            settings.SteamCmdPath = ReadString(localConfig, "tools", "steamcmd_path", settings.SteamCmdPath);
+            settings.ButlerPath = ReadString(localConfig, "tools", "butler_path", settings.ButlerPath);
+        }
+        settings.SteamCmdPath = PreferProjectRelativePath(settings.SteamCmdPath);
+        settings.ButlerPath = PreferProjectRelativePath(settings.ButlerPath);
+        return settings;
     }
+
+    private static void ApplySettings(DeploySettings settings, BuildDeployConfig buildConfig)
+    {
+        EnsureNestedConfigs(buildConfig);
+        buildConfig.Targets = settings.Targets;
+        buildConfig.ExportPreset = settings.ExportPreset;
+        buildConfig.ExportOutputPath = settings.ExportOutputPath;
+        buildConfig.BuildWithDebug = settings.BuildWithDebug;
+        SteamDeployConfig steam = buildConfig.SteamConfig!;
+        steam.SteamCmdPath = PreferProjectRelativePath(settings.SteamCmdPath);
+        steam.AppId = settings.SteamAppId;
+        steam.DepotId = settings.SteamDepotId;
+        steam.BuildDescription = settings.SteamBuildDescription;
+        steam.SetLive = settings.SteamSetLive;
+        steam.Branch = settings.SteamBranch;
+        steam.IgnoreFiles = settings.SteamIgnoreFiles;
+        ItchIoDeployConfig itch = buildConfig.ItchIoConfig!;
+        itch.ButlerPath = PreferProjectRelativePath(settings.ButlerPath);
+        itch.Target = settings.ItchTarget;
+        itch.Channel = settings.ItchChannel;
+        itch.UserVersion = settings.ItchUserVersion;
+        itch.IfChanged = settings.ItchIfChanged;
+        itch.IgnoreFiles = settings.ItchIgnoreFiles;
+    }
+
+    private static Error SaveResource(Resource resource, string fallbackPath)
+    {
+        string path = string.IsNullOrWhiteSpace(resource.ResourcePath) ? fallbackPath : resource.ResourcePath;
+        EnsureResourceDirectory(path);
+        return ResourceSaver.Save(resource, path);
+    }
+
+    private static string LoadSelectedBuildConfigPath()
+    {
+        var localConfig = new ConfigFile();
+        if (localConfig.Load(LocalSettingsPath) != Error.Ok) return DefaultBuildConfigPath;
+        string path = ReadString(localConfig, "resources", "selected_build_config", DefaultBuildConfigPath);
+        return string.IsNullOrWhiteSpace(path) ? DefaultBuildConfigPath : path;
+    }
+
+    private static void EnsureResourceDirectory(string resourcePath)
+    {
+        string? directory = Path.GetDirectoryName(ProjectSettings.GlobalizePath(resourcePath));
+        if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+    }
+
+    private static string ReadString(ConfigFile config, string section, string key, string fallback) =>
+        config.GetValue(section, key, fallback).AsString();
 
     private static string DeriveMachinePassword()
     {

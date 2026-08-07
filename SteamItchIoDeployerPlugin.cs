@@ -53,6 +53,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private Button? _butlerDownloadButton;
     private Button? _itchFoldoutButton;
     private Button? _saveSettingsButton;
+    private EditorResourcePicker? _buildConfigPicker;
+    private EditorResourcePicker? _steamConfigPicker;
+    private EditorResourcePicker? _itchConfigPicker;
     private Button? _buildButton;
     private Button? _uploadButton;
     private Button? _buildUploadButton;
@@ -62,10 +65,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private bool _guardUiProbePending;
     private string _presetFileStamp = string.Empty;
     private DeploySettings? _savedSettings;
+    private BuildDeployConfig? _buildConfig;
+    private bool _resourceAssignmentsDirty;
 
     public override void _EnterTree()
     {
-        DeploySettings settings = DeployConfigStore.LoadSettings();
+        _buildConfig = DeployConfigStore.LoadOrCreateBuildConfig();
+        DeploySettings settings = DeployConfigStore.ToSettings(_buildConfig);
         DeployCredentials credentials = DeployConfigStore.LoadCredentials();
         _savedSettings = CloneSettings(settings);
 
@@ -93,6 +99,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         root.AddChild(new Label { Text = "Godot Steam / itch.io Deployer" });
         root.AddChild(new Label { Text = "Build once, then upload the exported directory to the selected services." });
+
+        AddSection(root, "Configuration Assets");
+        var resourceGrid = CreateGrid(root);
+        _buildConfigPicker = AddResourceRow<BuildDeployConfig>(resourceGrid, "Build / Deploy Config", _buildConfig);
+        _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig);
+        _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig);
+        _buildConfigPicker.ResourceChanged += OnBuildConfigChanged;
+        _steamConfigPicker.ResourceChanged += OnSteamConfigChanged;
+        _itchConfigPicker.ResourceChanged += OnItchConfigChanged;
 
         AddSection(root, "Build");
         var buildGrid = CreateGrid(root);
@@ -276,7 +291,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         DeploySettings settings = ReadSettingsFromUi();
         DeployCredentials credentials = ReadCredentialsFromUi();
-        Error saveError = DeployConfigStore.SaveSettings(settings);
+        Error saveError = SaveSettingsToResources(settings);
         if (saveError != Error.Ok)
         {
             Interlocked.Exchange(ref _busy, 0);
@@ -316,7 +331,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 }
 
                 DeploySettings updatedSettings = ReadSettingsFromUi();
-                Error error = DeployConfigStore.SaveSettings(updatedSettings);
+                Error error = SaveSettingsToResources(updatedSettings);
                 if (error == Error.Ok)
                 {
                     _savedSettings = CloneSettings(updatedSettings);
@@ -640,14 +655,90 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private void SaveSettingsPressed()
     {
         DeploySettings settings = ReadSettingsFromUi();
-        Error error = DeployConfigStore.SaveSettings(settings);
+        Error error = SaveSettingsToResources(settings);
         if (error == Error.Ok)
         {
             if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
             if (_butler is not null) _butler.Text = settings.ButlerPath;
             _savedSettings = CloneSettings(settings);
         }
-        AppendLog(error == Error.Ok ? $"Settings saved to {DeployConfigStore.SettingsPath}." : $"Could not save settings: {error}");
+        AppendLog(error == Error.Ok ? $"Settings saved to {_buildConfig?.ResourcePath}." : $"Could not save settings: {error}");
+    }
+
+    private Error SaveSettingsToResources(DeploySettings settings)
+    {
+        if (_buildConfig is null)
+        {
+            return Error.InvalidParameter;
+        }
+
+        Error error = DeployConfigStore.SaveSettings(settings, _buildConfig);
+        if (error == Error.Ok)
+        {
+            _resourceAssignmentsDirty = false;
+            if (_buildConfigPicker is not null) _buildConfigPicker.EditedResource = _buildConfig;
+            if (_steamConfigPicker is not null) _steamConfigPicker.EditedResource = _buildConfig.SteamConfig;
+            if (_itchConfigPicker is not null) _itchConfigPicker.EditedResource = _buildConfig.ItchIoConfig;
+        }
+        return error;
+    }
+
+    private void OnBuildConfigChanged(Resource resource)
+    {
+        if (resource is not BuildDeployConfig selected) return;
+        DeployConfigStore.EnsureNestedConfigs(selected);
+        _buildConfig = selected;
+        if (_steamConfigPicker is not null) _steamConfigPicker.EditedResource = selected.SteamConfig;
+        if (_itchConfigPicker is not null) _itchConfigPicker.EditedResource = selected.ItchIoConfig;
+        DeploySettings settings = DeployConfigStore.ToSettings(selected);
+        ApplySettingsToUi(settings);
+        _savedSettings = CloneSettings(settings);
+        _resourceAssignmentsDirty = false;
+        if (!string.IsNullOrWhiteSpace(selected.ResourcePath))
+        {
+            DeployConfigStore.SaveSelectedBuildConfigPath(selected.ResourcePath);
+        }
+        AppendLog($"Loaded build/deploy config: {selected.ResourcePath}");
+    }
+
+    private void OnSteamConfigChanged(Resource resource)
+    {
+        if (_buildConfig is null || resource is not SteamDeployConfig selected) return;
+        _buildConfig.SteamConfig = selected;
+        ApplySettingsToUi(DeployConfigStore.ToSettings(_buildConfig));
+        _resourceAssignmentsDirty = true;
+        AppendLog($"Selected Steam config: {selected.ResourcePath}");
+    }
+
+    private void OnItchConfigChanged(Resource resource)
+    {
+        if (_buildConfig is null || resource is not ItchIoDeployConfig selected) return;
+        _buildConfig.ItchIoConfig = selected;
+        ApplySettingsToUi(DeployConfigStore.ToSettings(_buildConfig));
+        _resourceAssignmentsDirty = true;
+        AppendLog($"Selected itch.io config: {selected.ResourcePath}");
+    }
+
+    private void ApplySettingsToUi(DeploySettings settings)
+    {
+        if (_preset is not null) PopulatePresets(_preset, settings.ExportPreset);
+        if (_exportOutput is not null) _exportOutput.Text = settings.ExportOutputPath;
+        if (_buildWithDebug is not null) _buildWithDebug.ButtonPressed = settings.BuildWithDebug;
+        if (_steamEnabled is not null) _steamEnabled.ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam);
+        if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
+        if (_steamAppId is not null) _steamAppId.Text = settings.SteamAppId;
+        if (_steamDepotId is not null) _steamDepotId.Text = settings.SteamDepotId;
+        if (_steamDescription is not null) _steamDescription.Text = settings.SteamBuildDescription;
+        if (_steamSetLive is not null) _steamSetLive.ButtonPressed = settings.SteamSetLive;
+        if (_steamBranch is not null) _steamBranch.Text = settings.SteamBranch;
+        if (_steamIgnore is not null) _steamIgnore.Text = settings.SteamIgnoreFiles;
+        if (_itchEnabled is not null) _itchEnabled.ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo);
+        if (_butler is not null) _butler.Text = settings.ButlerPath;
+        if (_itchTarget is not null) _itchTarget.Text = settings.ItchTarget;
+        if (_itchChannel is not null) _itchChannel.Text = settings.ItchChannel;
+        if (_itchVersion is not null) _itchVersion.Text = settings.ItchUserVersion;
+        if (_itchIfChanged is not null) _itchIfChanged.ButtonPressed = settings.ItchIfChanged;
+        if (_itchIgnore is not null) _itchIgnore.Text = settings.ItchIgnoreFiles;
     }
 
     private void SaveCredentialsPressed()
@@ -784,7 +875,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         bool busy = Volatile.Read(ref _busy) != 0;
         bool hasPreset = _preset is { ItemCount: > 0 };
-        bool settingsDirty = _savedSettings is null || !SettingsEqual(ReadSettingsFromUi(), _savedSettings);
+        bool settingsDirty = _resourceAssignmentsDirty || _savedSettings is null || !SettingsEqual(ReadSettingsFromUi(), _savedSettings);
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
@@ -1075,6 +1166,20 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         grid.AddChild(control);
     }
 
+    private static EditorResourcePicker AddResourceRow<T>(GridContainer grid, string label, T resource)
+        where T : Resource
+    {
+        var picker = new EditorResourcePicker
+        {
+            BaseType = typeof(T).Name,
+            EditedResource = resource,
+            Editable = true,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        AddRow(grid, label, picker);
+        return picker;
+    }
+
     private static LineEdit AddLineRow(GridContainer grid, string label, string value, string placeholder = "", bool secret = false)
     {
         var edit = new LineEdit
@@ -1163,6 +1268,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
         GD.Print($"{LogPrefix} BUILD_WITH_DEBUG={_buildWithDebug?.ButtonPressed}");
+        GD.Print($"{LogPrefix} RESOURCE_CONFIG_MODE={_buildConfig is not null}");
+        GD.Print($"{LogPrefix} BUILD_CONFIG_RESOURCE_PATH={_buildConfig?.ResourcePath}");
+        GD.Print($"{LogPrefix} STEAM_CONFIG_RESOURCE_PATH={_buildConfig?.SteamConfig?.ResourcePath}");
+        GD.Print($"{LogPrefix} ITCH_CONFIG_RESOURCE_PATH={_buildConfig?.ItchIoConfig?.ResourcePath}");
+        GD.Print($"{LogPrefix} RESOURCE_CONFIG_REFS_PRESENT={_buildConfig?.SteamConfig is not null && _buildConfig?.ItchIoConfig is not null}");
         string resolvedGitSha = VdfGenerator.ResolveGitSha();
         GD.Print($"{LogPrefix} GIT_SHA_RESOLVED={resolvedGitSha != "NO_SHA"}");
         GD.Print($"{LogPrefix} GIT_SHA_LENGTH={resolvedGitSha.Length}");
