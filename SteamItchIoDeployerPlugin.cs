@@ -43,6 +43,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private Button? _steamDownloadButton;
     private Button? _buildFoldoutButton;
     private Button? _steamFoldoutButton;
+    private VBoxContainer? _steamContent;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
     private LineEdit? _itchTarget;
@@ -53,6 +54,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _butlerApiKey;
     private Button? _butlerDownloadButton;
     private Button? _itchFoldoutButton;
+    private Button? _consoleFoldoutButton;
+    private VBoxContainer? _consoleContent;
     private Button? _saveSettingsButton;
     private EditorResourcePicker? _buildConfigPicker;
     private EditorResourcePicker? _steamConfigPicker;
@@ -86,17 +89,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             Global = true,
         };
 
-        var scroll = new ScrollContainer { Name = "DeployerScroll" };
-        scroll.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
-        _dock.AddChild(scroll);
-
         var root = new VBoxContainer
         {
             Name = "DeployerContent",
             CustomMinimumSize = new Vector2(760, 640),
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
         };
-        scroll.AddChild(root);
+        root.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        _dock.AddChild(root);
 
         root.AddChild(new Label { Text = "Godot Steam / itch.io Deployer" });
         root.AddChild(new Label { Text = "Build once, then upload the exported directory to the selected services." });
@@ -104,7 +105,30 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         var buildConfigGrid = CreateGrid(root);
         _buildConfigPicker = AddResourceRow<BuildDeployConfig>(buildConfigGrid, "Build / Deploy Config", _buildConfig);
 
-        VBoxContainer buildContent = AddFoldoutSection(root, "Build", out _buildFoldoutButton);
+        var actionButtons = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        root.AddChild(actionButtons);
+        _saveSettingsButton = new Button { Text = "Save Settings" };
+        _saveSettingsButton.Pressed += SaveSettingsPressed;
+        actionButtons.AddChild(_saveSettingsButton);
+        _buildButton = AddButton(actionButtons, "Build", () => StartWorkflow(build: true, upload: false));
+        _uploadButton = AddButton(actionButtons, "Upload", () => StartWorkflow(build: false, upload: true));
+        _buildUploadButton = AddButton(actionButtons, "Build & Upload", () => StartWorkflow(build: true, upload: true));
+
+        var scroll = new ScrollContainer
+        {
+            Name = "DeployerSettingsScroll",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        root.AddChild(scroll);
+        var settingsContent = new VBoxContainer
+        {
+            Name = "DeployerSettingsContent",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        scroll.AddChild(settingsContent);
+
+        VBoxContainer buildContent = AddFoldoutSection(settingsContent, "Build", out _buildFoldoutButton);
         var resourceGrid = CreateGrid(buildContent);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
@@ -120,10 +144,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
-        VBoxContainer steamContent = AddFoldoutSection(root, "Steam", out _steamFoldoutButton);
+        _steamContent = AddFoldoutSection(settingsContent, "Steam", out _steamFoldoutButton);
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
-        steamContent.AddChild(_steamEnabled);
-        var steamGrid = CreateGrid(steamContent);
+        _steamContent.AddChild(_steamEnabled);
+        var steamGrid = CreateGrid(_steamContent);
         _steamCmd = AddToolPathRow(
             steamGrid,
             "SteamCMD",
@@ -171,9 +195,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Button cancelSteamGuard = new() { Text = "Cancel" };
         cancelSteamGuard.Pressed += CancelSteamGuardCode;
         steamGuardRow.AddChild(cancelSteamGuard);
-        steamContent.AddChild(_steamGuardPanel);
+        _steamContent.AddChild(_steamGuardPanel);
 
-        VBoxContainer itchContent = AddFoldoutSection(root, "itch.io", out _itchFoldoutButton);
+        VBoxContainer itchContent = AddFoldoutSection(settingsContent, "itch.io", out _itchFoldoutButton);
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
         itchContent.AddChild(_itchEnabled);
         var itchGrid = CreateGrid(itchContent);
@@ -194,18 +218,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         saveItchCredentials.Pressed += SaveCredentialsPressed;
         AddRow(itchGrid, string.Empty, saveItchCredentials);
 
-        var persistenceButtons = new HBoxContainer();
-        root.AddChild(persistenceButtons);
-        _saveSettingsButton = new Button { Text = "Save Settings" };
-        _saveSettingsButton.Pressed += SaveSettingsPressed;
-        persistenceButtons.AddChild(_saveSettingsButton);
-
-        var workflowButtons = new HBoxContainer();
-        root.AddChild(workflowButtons);
-        _buildButton = AddButton(workflowButtons, "Build", () => StartWorkflow(build: true, upload: false));
-        _uploadButton = AddButton(workflowButtons, "Upload", () => StartWorkflow(build: false, upload: true));
-        _buildUploadButton = AddButton(workflowButtons, "Build & Upload", () => StartWorkflow(build: true, upload: true));
-
+        _consoleContent = AddFoldoutSection(root, "Console Result", out _consoleFoldoutButton, expanded: false);
         _log = new RichTextLabel
         {
             CustomMinimumSize = new Vector2(0, 220),
@@ -213,7 +226,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             ScrollFollowing = true,
             SelectionEnabled = true,
         };
-        root.AddChild(_log);
+        _consoleContent.AddChild(_log);
 
         AddDock(_dock);
         SetProcess(true);
@@ -226,6 +239,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (HasProbeArgument())
         {
             OnProbeButtonPressed();
+            SetFoldoutExpanded(_steamFoldoutButton, _steamContent, "Steam", false);
             _guardUiProbePending = true;
             _ = RequestSteamGuardCodeAsync("probe");
         }
@@ -260,6 +274,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             _guardUiProbePending = false;
             GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_REQUEST={_steamGuardPanel?.Visible}");
+            GD.Print($"{LogPrefix} STEAM_EXPANDED_AFTER_GUARD={_steamFoldoutButton?.ButtonPressed == true && _steamContent?.Visible == true}");
             CancelSteamGuardCode();
             GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_CANCEL={_steamGuardPanel?.Visible}");
         }
@@ -290,6 +305,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             AppendLog("Another deployment operation is already running.");
             return;
         }
+
+        ExpandConsoleResult();
 
         DeploySettings settings = ReadSettingsFromUi();
         DeployCredentials credentials = ReadCredentialsFromUi();
@@ -577,10 +594,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 _steamGuardPanel.Visible = true;
             }
 
-            if (_steamFoldoutButton is not null)
-            {
-                _steamFoldoutButton.ButtonPressed = true;
-            }
+            SetFoldoutExpanded(_steamFoldoutButton, _steamContent, "Steam", true);
         });
         return completion.Task;
     }
@@ -1135,19 +1149,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         parent.AddChild(new Label { Text = title });
     }
 
-    private static VBoxContainer AddFoldoutSection(Control parent, string title, out Button foldoutButton)
+    private static VBoxContainer AddFoldoutSection(Control parent, string title, out Button foldoutButton, bool expanded = true)
     {
         parent.AddChild(new HSeparator());
         var content = new VBoxContainer
         {
-            Visible = true,
+            Visible = expanded,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
         };
         foldoutButton = new Button
         {
-            Text = $"▼ {title}",
+            Text = $"{(expanded ? "▼" : "▶")} {title}",
             ToggleMode = true,
-            ButtonPressed = true,
+            ButtonPressed = expanded,
             Alignment = HorizontalAlignment.Left,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
         };
@@ -1161,6 +1175,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         parent.AddChild(content);
         return content;
     }
+
+    private static void SetFoldoutExpanded(Button? button, Control? content, string title, bool expanded)
+    {
+        if (button is not null)
+        {
+            button.SetPressedNoSignal(expanded);
+            button.Text = $"{(expanded ? "▼" : "▶")} {title}";
+        }
+        if (content is not null) content.Visible = expanded;
+    }
+
+    private void ExpandConsoleResult() =>
+        SetFoldoutExpanded(_consoleFoldoutButton, _consoleContent, "Console Result", true);
 
     private static void AddRow(GridContainer grid, string label, Control control)
     {
@@ -1258,6 +1285,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} BUILD_CONFIG_EXPANDED={_buildFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
+        GD.Print($"{LogPrefix} CONSOLE_RESULT_COLLAPSED_INITIALLY={_consoleFoldoutButton?.ButtonPressed == false && _consoleContent?.Visible == false}");
+        ExpandConsoleResult();
+        GD.Print($"{LogPrefix} CONSOLE_RESULT_EXPANDS_FOR_WORKFLOW={_consoleFoldoutButton?.ButtonPressed == true && _consoleContent?.Visible == true}");
+        SetFoldoutExpanded(_consoleFoldoutButton, _consoleContent, "Console Result", false);
         GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
         if (_exportOutput is not null)
         {
