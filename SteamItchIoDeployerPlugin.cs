@@ -1151,6 +1151,16 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
+        if (_exportOutput is not null)
+        {
+            string originalOutput = _exportOutput.Text;
+            _exportOutput.Text += ".probe-unsaved";
+            UpdateButtonState();
+            GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY_AFTER_EDIT={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
+            _exportOutput.Text = originalOutput;
+            UpdateButtonState();
+            GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY_AFTER_REVERT={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
+        }
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
         GD.Print($"{LogPrefix} BUILD_WITH_DEBUG={_buildWithDebug?.ButtonPressed}");
         string resolvedGitSha = VdfGenerator.ResolveGitSha();
