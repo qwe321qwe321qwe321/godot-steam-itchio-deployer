@@ -56,6 +56,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private Button? _itchFoldoutButton;
     private Button? _consoleFoldoutButton;
     private VBoxContainer? _consoleContent;
+    private HBoxContainer? _settingsColumns;
     private Button? _saveSettingsButton;
     private EditorResourcePicker? _buildConfigPicker;
     private EditorResourcePicker? _steamConfigPicker;
@@ -121,14 +122,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
         };
         root.AddChild(scroll);
-        var settingsContent = new VBoxContainer
+        _settingsColumns = new HBoxContainer
         {
-            Name = "DeployerSettingsContent",
+            Name = "DeployerSettingsColumns",
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
         };
-        scroll.AddChild(settingsContent);
+        scroll.AddChild(_settingsColumns);
 
-        VBoxContainer buildContent = AddFoldoutSection(settingsContent, "Build", out _buildFoldoutButton);
+        VBoxContainer buildColumn = AddSettingsColumn(_settingsColumns, "BuildColumn");
+        VBoxContainer steamColumn = AddSettingsColumn(_settingsColumns, "SteamColumn");
+        VBoxContainer itchColumn = AddSettingsColumn(_settingsColumns, "ItchColumn");
+
+        VBoxContainer buildContent = AddFoldoutSection(buildColumn, "Build", out _buildFoldoutButton);
         var resourceGrid = CreateGrid(buildContent);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
@@ -144,7 +150,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
-        _steamContent = AddFoldoutSection(settingsContent, "Steam", out _steamFoldoutButton);
+        _steamContent = AddFoldoutSection(steamColumn, "Steam", out _steamFoldoutButton);
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
         _steamContent.AddChild(_steamEnabled);
         var steamGrid = CreateGrid(_steamContent);
@@ -197,7 +203,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         steamGuardRow.AddChild(cancelSteamGuard);
         _steamContent.AddChild(_steamGuardPanel);
 
-        VBoxContainer itchContent = AddFoldoutSection(settingsContent, "itch.io", out _itchFoldoutButton);
+        VBoxContainer itchContent = AddFoldoutSection(itchColumn, "itch.io", out _itchFoldoutButton);
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
         itchContent.AddChild(_itchEnabled);
         var itchGrid = CreateGrid(itchContent);
@@ -1143,6 +1149,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         return grid;
     }
 
+    private static VBoxContainer AddSettingsColumn(HBoxContainer parent, string name)
+    {
+        var column = new VBoxContainer
+        {
+            Name = name,
+            CustomMinimumSize = new Vector2(250, 0),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        parent.AddChild(column);
+        return column;
+    }
+
     private static void AddSection(Control parent, string title)
     {
         parent.AddChild(new HSeparator());
@@ -1285,6 +1304,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} BUILD_CONFIG_EXPANDED={_buildFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
+        GD.Print($"{LogPrefix} SETTINGS_HORIZONTAL_COLUMN_COUNT={_settingsColumns?.GetChildCount()}");
         GD.Print($"{LogPrefix} CONSOLE_RESULT_COLLAPSED_INITIALLY={_consoleFoldoutButton?.ButtonPressed == false && _consoleContent?.Visible == false}");
         ExpandConsoleResult();
         GD.Print($"{LogPrefix} CONSOLE_RESULT_EXPANDS_FOR_WORKFLOW={_consoleFoldoutButton?.ButtonPressed == true && _consoleContent?.Visible == true}");
