@@ -42,6 +42,8 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
 4. Use **Save Settings** to write shared non-secret values to `res://deploy_config.cfg`. Machine-specific SteamCMD and butler paths are stored separately at `res://.deployer/local_settings.cfg`. Paths inside the project are stored relative to the project root (for example `.deployer/tools/steamcmd/steamcmd.exe`); external tools retain absolute paths.
 5. Optionally use **Save Encrypted Credentials**. Credentials are machine- and project-bound and saved at `res://.deployer/credentials.cfg`. Steam Guard codes are never saved.
 
+Steam and itch.io configuration panels can be collapsed independently. Each **Save Encrypted Credentials** action sits directly below that platform's secret input. **Save Settings** gains an asterisk and yellow highlight whenever the current non-secret configuration differs from the saved files; credential edits are intentionally tracked separately.
+
 Use **Test Steam Login** after filling in the SteamCMD path, username, and password. The Steam Guard field is hidden during normal setup. If SteamCMD reports that a Guard code is required during a login test or upload, the plugin stops that attempt, reveals a temporary code prompt, and retries the same operation after submission without rebuilding. Guard detection monitors both redirected process output and SteamCMD's appended `logs/console_log.txt`, because current Windows SteamCMD builds may emit the interactive prompt only to that log.
 
 The export output is a file path because that is what Godot's export CLI requires. Uploads use the parent directory of that file as their content root.

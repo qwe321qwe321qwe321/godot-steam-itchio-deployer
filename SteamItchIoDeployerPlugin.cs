@@ -41,6 +41,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private TaskCompletionSource<string?>? _steamGuardCompletion;
     private Button? _steamLoginTestButton;
     private Button? _steamDownloadButton;
+    private Button? _steamFoldoutButton;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
     private LineEdit? _itchTarget;
@@ -50,6 +51,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _itchIgnore;
     private LineEdit? _butlerApiKey;
     private Button? _butlerDownloadButton;
+    private Button? _itchFoldoutButton;
+    private Button? _saveSettingsButton;
     private Button? _buildButton;
     private Button? _uploadButton;
     private Button? _buildUploadButton;
@@ -58,11 +61,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private bool _quitAfterToolInstall;
     private bool _guardUiProbePending;
     private string _presetFileStamp = string.Empty;
+    private DeploySettings? _savedSettings;
 
     public override void _EnterTree()
     {
         DeploySettings settings = DeployConfigStore.LoadSettings();
         DeployCredentials credentials = DeployConfigStore.LoadCredentials();
+        _savedSettings = CloneSettings(settings);
 
         _dock = new EditorDock
         {
@@ -98,10 +103,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
-        AddSection(root, "Steam");
+        VBoxContainer steamContent = AddFoldoutSection(root, "Steam", out _steamFoldoutButton);
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
-        root.AddChild(_steamEnabled);
-        var steamGrid = CreateGrid(root);
+        steamContent.AddChild(_steamEnabled);
+        var steamGrid = CreateGrid(steamContent);
         _steamCmd = AddToolPathRow(
             steamGrid,
             "SteamCMD",
@@ -121,6 +126,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _steamIgnore = AddLineRow(steamGrid, "Ignore Files", settings.SteamIgnoreFiles, "Comma-separated patterns");
         _steamUsername = AddLineRow(steamGrid, "Username", credentials.SteamUsername);
         _steamPassword = AddLineRow(steamGrid, "Password", credentials.SteamPassword, secret: true);
+        Button saveSteamCredentials = new() { Text = "Save Encrypted Credentials" };
+        saveSteamCredentials.Pressed += SaveCredentialsPressed;
+        AddRow(steamGrid, string.Empty, saveSteamCredentials);
         _steamLoginTestButton = new Button { Text = "Test Steam Login" };
         _steamLoginTestButton.Pressed += StartSteamLoginTest;
         AddRow(steamGrid, "Authentication", _steamLoginTestButton);
@@ -146,12 +154,12 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Button cancelSteamGuard = new() { Text = "Cancel" };
         cancelSteamGuard.Pressed += CancelSteamGuardCode;
         steamGuardRow.AddChild(cancelSteamGuard);
-        root.AddChild(_steamGuardPanel);
+        steamContent.AddChild(_steamGuardPanel);
 
-        AddSection(root, "itch.io");
+        VBoxContainer itchContent = AddFoldoutSection(root, "itch.io", out _itchFoldoutButton);
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
-        root.AddChild(_itchEnabled);
-        var itchGrid = CreateGrid(root);
+        itchContent.AddChild(_itchEnabled);
+        var itchGrid = CreateGrid(itchContent);
         _butler = AddToolPathRow(
             itchGrid,
             "Butler",
@@ -165,15 +173,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _itchIfChanged = AddCheckRow(itchGrid, "If Changed", settings.ItchIfChanged);
         _itchIgnore = AddLineRow(itchGrid, "Ignore Files", settings.ItchIgnoreFiles, "Comma-separated patterns");
         _butlerApiKey = AddLineRow(itchGrid, "API Key", credentials.ButlerApiKey, secret: true);
+        Button saveItchCredentials = new() { Text = "Save Encrypted Credentials" };
+        saveItchCredentials.Pressed += SaveCredentialsPressed;
+        AddRow(itchGrid, string.Empty, saveItchCredentials);
 
         var persistenceButtons = new HBoxContainer();
         root.AddChild(persistenceButtons);
-        var saveSettings = new Button { Text = "Save Settings" };
-        saveSettings.Pressed += SaveSettingsPressed;
-        persistenceButtons.AddChild(saveSettings);
-        var saveCredentials = new Button { Text = "Save Encrypted Credentials" };
-        saveCredentials.Pressed += SaveCredentialsPressed;
-        persistenceButtons.AddChild(saveCredentials);
+        _saveSettingsButton = new Button { Text = "Save Settings" };
+        _saveSettingsButton.Pressed += SaveSettingsPressed;
+        persistenceButtons.AddChild(_saveSettingsButton);
 
         var workflowButtons = new HBoxContainer();
         root.AddChild(workflowButtons);
@@ -276,6 +284,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             return;
         }
 
+        _savedSettings = CloneSettings(settings);
+
         AppendLog($"Starting {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
         _ = RunWorkflowAsync(settings, credentials, build, upload);
     }
@@ -305,7 +315,12 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                     field.Text = DeployConfigStore.PreferProjectRelativePath(executablePath);
                 }
 
-                Error error = DeployConfigStore.SaveSettings(ReadSettingsFromUi());
+                DeploySettings updatedSettings = ReadSettingsFromUi();
+                Error error = DeployConfigStore.SaveSettings(updatedSettings);
+                if (error == Error.Ok)
+                {
+                    _savedSettings = CloneSettings(updatedSettings);
+                }
                 AppendLog(error == Error.Ok
                     ? $"{tool} path saved automatically."
                     : $"{tool} installed, but settings could not be saved: {error}");
@@ -544,6 +559,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             {
                 _steamGuardPanel.Visible = true;
             }
+
+            if (_steamFoldoutButton is not null)
+            {
+                _steamFoldoutButton.ButtonPressed = true;
+            }
         });
         return completion.Task;
     }
@@ -625,6 +645,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
             if (_butler is not null) _butler.Text = settings.ButlerPath;
+            _savedSettings = CloneSettings(settings);
         }
         AppendLog(error == Error.Ok ? $"Settings saved to {DeployConfigStore.SettingsPath}." : $"Could not save settings: {error}");
     }
@@ -669,6 +690,46 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         SteamGuardCode = string.Empty,
         ButlerApiKey = _butlerApiKey?.Text.Trim() ?? string.Empty,
     };
+
+    private static DeploySettings CloneSettings(DeploySettings source) => new()
+    {
+        Targets = source.Targets,
+        ExportPreset = source.ExportPreset,
+        ExportOutputPath = source.ExportOutputPath,
+        BuildWithDebug = source.BuildWithDebug,
+        SteamCmdPath = source.SteamCmdPath,
+        SteamAppId = source.SteamAppId,
+        SteamDepotId = source.SteamDepotId,
+        SteamBuildDescription = source.SteamBuildDescription,
+        SteamSetLive = source.SteamSetLive,
+        SteamBranch = source.SteamBranch,
+        SteamIgnoreFiles = source.SteamIgnoreFiles,
+        ButlerPath = source.ButlerPath,
+        ItchTarget = source.ItchTarget,
+        ItchChannel = source.ItchChannel,
+        ItchUserVersion = source.ItchUserVersion,
+        ItchIfChanged = source.ItchIfChanged,
+        ItchIgnoreFiles = source.ItchIgnoreFiles,
+    };
+
+    private static bool SettingsEqual(DeploySettings left, DeploySettings right) =>
+        left.Targets == right.Targets &&
+        left.BuildWithDebug == right.BuildWithDebug &&
+        left.SteamSetLive == right.SteamSetLive &&
+        left.ItchIfChanged == right.ItchIfChanged &&
+        string.Equals(left.ExportPreset, right.ExportPreset, StringComparison.Ordinal) &&
+        string.Equals(left.ExportOutputPath, right.ExportOutputPath, StringComparison.Ordinal) &&
+        string.Equals(left.SteamCmdPath, right.SteamCmdPath, StringComparison.Ordinal) &&
+        string.Equals(left.SteamAppId, right.SteamAppId, StringComparison.Ordinal) &&
+        string.Equals(left.SteamDepotId, right.SteamDepotId, StringComparison.Ordinal) &&
+        string.Equals(left.SteamBuildDescription, right.SteamBuildDescription, StringComparison.Ordinal) &&
+        string.Equals(left.SteamBranch, right.SteamBranch, StringComparison.Ordinal) &&
+        string.Equals(left.SteamIgnoreFiles, right.SteamIgnoreFiles, StringComparison.Ordinal) &&
+        string.Equals(left.ButlerPath, right.ButlerPath, StringComparison.Ordinal) &&
+        string.Equals(left.ItchTarget, right.ItchTarget, StringComparison.Ordinal) &&
+        string.Equals(left.ItchChannel, right.ItchChannel, StringComparison.Ordinal) &&
+        string.Equals(left.ItchUserVersion, right.ItchUserVersion, StringComparison.Ordinal) &&
+        string.Equals(left.ItchIgnoreFiles, right.ItchIgnoreFiles, StringComparison.Ordinal);
 
     private static void PopulatePresets(OptionButton option, string selectedPreset)
     {
@@ -723,9 +784,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         bool busy = Volatile.Read(ref _busy) != 0;
         bool hasPreset = _preset is { ItemCount: > 0 };
+        bool settingsDirty = _savedSettings is null || !SettingsEqual(ReadSettingsFromUi(), _savedSettings);
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
+        if (_saveSettingsButton is not null)
+        {
+            _saveSettingsButton.Disabled = busy;
+            _saveSettingsButton.Text = settingsDirty ? "Save Settings *" : "Save Settings";
+            _saveSettingsButton.SelfModulate = settingsDirty ? Color.FromHtml("#ffd866") : Colors.White;
+            _saveSettingsButton.TooltipText = settingsDirty
+                ? "Settings have unsaved changes."
+                : "All settings are saved.";
+        }
         if (_steamLoginTestButton is not null)
         {
             bool canTestLogin = TryResolveExecutablePath(_steamCmd?.Text, DeployToolKind.SteamCmd, out _) &&
@@ -971,6 +1042,33 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         parent.AddChild(new Label { Text = title });
     }
 
+    private static VBoxContainer AddFoldoutSection(Control parent, string title, out Button foldoutButton)
+    {
+        parent.AddChild(new HSeparator());
+        var content = new VBoxContainer
+        {
+            Visible = true,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        foldoutButton = new Button
+        {
+            Text = $"▼ {title}",
+            ToggleMode = true,
+            ButtonPressed = true,
+            Alignment = HorizontalAlignment.Left,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        Button capturedButton = foldoutButton;
+        capturedButton.Toggled += expanded =>
+        {
+            content.Visible = expanded;
+            capturedButton.Text = $"{(expanded ? "▼" : "▶")} {title}";
+        };
+        parent.AddChild(capturedButton);
+        parent.AddChild(content);
+        return content;
+    }
+
     private static void AddRow(GridContainer grid, string label, Control control)
     {
         grid.AddChild(new Label { Text = label });
@@ -1050,6 +1148,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} BUTLER_PATH_IS_RELATIVE={!Path.IsPathRooted(_butler?.Text ?? string.Empty)}");
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
+        GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
+        GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
+        GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
         GD.Print($"{LogPrefix} BUILD_WITH_DEBUG={_buildWithDebug?.ButtonPressed}");
         string resolvedGitSha = VdfGenerator.ResolveGitSha();
