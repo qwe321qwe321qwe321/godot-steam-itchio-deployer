@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -41,8 +42,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private TaskCompletionSource<string?>? _steamGuardCompletion;
     private Button? _steamLoginTestButton;
     private Button? _steamDownloadButton;
-    private Button? _buildFoldoutButton;
-    private Button? _steamFoldoutButton;
     private VBoxContainer? _steamContent;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
@@ -53,7 +52,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _itchIgnore;
     private LineEdit? _butlerApiKey;
     private Button? _butlerDownloadButton;
-    private Button? _itchFoldoutButton;
     private Button? _consoleFoldoutButton;
     private VBoxContainer? _consoleContent;
     private HBoxContainer? _settingsColumns;
@@ -134,7 +132,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         VBoxContainer steamColumn = AddSettingsColumn(_settingsColumns, "SteamColumn");
         VBoxContainer itchColumn = AddSettingsColumn(_settingsColumns, "ItchColumn");
 
-        VBoxContainer buildContent = AddFoldoutSection(buildColumn, "Build", out _buildFoldoutButton);
+        VBoxContainer buildContent = AddStaticSection(buildColumn, "Build");
         var resourceGrid = CreateGrid(buildContent);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
@@ -150,7 +148,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
-        _steamContent = AddFoldoutSection(steamColumn, "Steam", out _steamFoldoutButton);
+        _steamContent = AddStaticSection(steamColumn, "Steam");
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
         _steamContent.AddChild(_steamEnabled);
         var steamGrid = CreateGrid(_steamContent);
@@ -203,7 +201,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         steamGuardRow.AddChild(cancelSteamGuard);
         _steamContent.AddChild(_steamGuardPanel);
 
-        VBoxContainer itchContent = AddFoldoutSection(itchColumn, "itch.io", out _itchFoldoutButton);
+        VBoxContainer itchContent = AddStaticSection(itchColumn, "itch.io");
         _itchEnabled = new CheckBox { Text = "Upload to itch.io", ButtonPressed = settings.Targets.HasFlag(DeployTargets.ItchIo) };
         itchContent.AddChild(_itchEnabled);
         var itchGrid = CreateGrid(itchContent);
@@ -245,7 +243,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (HasProbeArgument())
         {
             OnProbeButtonPressed();
-            SetFoldoutExpanded(_steamFoldoutButton, _steamContent, "Steam", false);
             _guardUiProbePending = true;
             _ = RequestSteamGuardCodeAsync("probe");
         }
@@ -280,7 +277,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             _guardUiProbePending = false;
             GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_REQUEST={_steamGuardPanel?.Visible}");
-            GD.Print($"{LogPrefix} STEAM_EXPANDED_AFTER_GUARD={_steamFoldoutButton?.ButtonPressed == true && _steamContent?.Visible == true}");
+            GD.Print($"{LogPrefix} STEAM_SECTION_VISIBLE_AFTER_GUARD={_steamContent?.Visible == true}");
             CancelSteamGuardCode();
             GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE_AFTER_CANCEL={_steamGuardPanel?.Visible}");
         }
@@ -600,7 +597,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 _steamGuardPanel.Visible = true;
             }
 
-            SetFoldoutExpanded(_steamFoldoutButton, _steamContent, "Steam", true);
         });
         return completion.Task;
     }
@@ -1195,6 +1191,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         return content;
     }
 
+    private static VBoxContainer AddStaticSection(Control parent, string title)
+    {
+        parent.AddChild(new HSeparator());
+        parent.AddChild(new Label { Text = title, HorizontalAlignment = HorizontalAlignment.Center });
+        var content = new VBoxContainer
+        {
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        parent.AddChild(content);
+        return content;
+    }
+
     private static void SetFoldoutExpanded(Button? button, Control? content, string title, bool expanded)
     {
         if (button is not null)
@@ -1301,10 +1310,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} BUTLER_PATH_IS_RELATIVE={!Path.IsPathRooted(_butler?.Text ?? string.Empty)}");
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
-        GD.Print($"{LogPrefix} BUILD_CONFIG_EXPANDED={_buildFoldoutButton?.ButtonPressed}");
-        GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
-        GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} SETTINGS_HORIZONTAL_COLUMN_COUNT={_settingsColumns?.GetChildCount()}");
+        GD.Print($"{LogPrefix} SETTINGS_COLUMNS_ALWAYS_VISIBLE={_settingsColumns?.GetChildren().All(child => child is Control { Visible: true })}");
         GD.Print($"{LogPrefix} CONSOLE_RESULT_COLLAPSED_INITIALLY={_consoleFoldoutButton?.ButtonPressed == false && _consoleContent?.Visible == false}");
         ExpandConsoleResult();
         GD.Print($"{LogPrefix} CONSOLE_RESULT_EXPANDS_FOR_WORKFLOW={_consoleFoldoutButton?.ButtonPressed == true && _consoleContent?.Visible == true}");
