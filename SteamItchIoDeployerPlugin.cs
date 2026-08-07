@@ -41,6 +41,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private TaskCompletionSource<string?>? _steamGuardCompletion;
     private Button? _steamLoginTestButton;
     private Button? _steamDownloadButton;
+    private Button? _buildFoldoutButton;
     private Button? _steamFoldoutButton;
     private CheckBox? _itchEnabled;
     private LineEdit? _butler;
@@ -100,8 +101,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         root.AddChild(new Label { Text = "Godot Steam / itch.io Deployer" });
         root.AddChild(new Label { Text = "Build once, then upload the exported directory to the selected services." });
 
-        AddSection(root, "Configuration Assets");
-        var resourceGrid = CreateGrid(root);
+        VBoxContainer buildContent = AddFoldoutSection(root, "Build", out _buildFoldoutButton);
+        var resourceGrid = CreateGrid(buildContent);
         _buildConfigPicker = AddResourceRow<BuildDeployConfig>(resourceGrid, "Build / Deploy Config", _buildConfig);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
@@ -109,8 +110,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _steamConfigPicker.ResourceChanged += OnSteamConfigChanged;
         _itchConfigPicker.ResourceChanged += OnItchConfigChanged;
 
-        AddSection(root, "Build");
-        var buildGrid = CreateGrid(root);
+        var buildGrid = CreateGrid(buildContent);
         _preset = new OptionButton { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         PopulatePresets(_preset, settings.ExportPreset);
         _presetFileStamp = GetPresetFileStamp();
@@ -1253,6 +1253,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} BUTLER_PATH_IS_RELATIVE={!Path.IsPathRooted(_butler?.Text ?? string.Empty)}");
         GD.Print($"{LogPrefix} STEAM_GUARD_VISIBLE={_steamGuardPanel?.Visible}");
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
+        GD.Print($"{LogPrefix} BUILD_CONFIG_EXPANDED={_buildFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} STEAM_CONFIG_EXPANDED={_steamFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} ITCH_CONFIG_EXPANDED={_itchFoldoutButton?.ButtonPressed}");
         GD.Print($"{LogPrefix} SAVE_SETTINGS_DIRTY={_saveSettingsButton?.Text.EndsWith("*", StringComparison.Ordinal)}");
