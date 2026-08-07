@@ -39,10 +39,9 @@ public static class DeployConfigStore
         };
         ApplySettings(legacy, buildConfig);
 
-        EnsureResourceDirectory(DefaultBuildConfigPath);
-        ResourceSaver.Save(steamConfig, DefaultSteamConfigPath);
-        ResourceSaver.Save(itchConfig, DefaultItchConfigPath);
-        ResourceSaver.Save(buildConfig, DefaultBuildConfigPath);
+        SaveResource(steamConfig, DefaultSteamConfigPath);
+        SaveResource(itchConfig, DefaultItchConfigPath);
+        SaveResource(buildConfig, DefaultBuildConfigPath);
         SaveSelectedBuildConfigPath(DefaultBuildConfigPath);
         return buildConfig;
     }
@@ -79,9 +78,9 @@ public static class DeployConfigStore
         EnsureNestedConfigs(buildConfig);
         ApplySettings(settings, buildConfig);
 
-        Error steamError = SaveResource(buildConfig.SteamConfig!, DefaultSteamConfigPath);
+        Error steamError = SaveResource(buildConfig.SteamConfig!, GetPlatformFallbackPath(buildConfig, "SteamDeployConfig.tres"));
         if (steamError != Error.Ok) return steamError;
-        Error itchError = SaveResource(buildConfig.ItchIoConfig!, DefaultItchConfigPath);
+        Error itchError = SaveResource(buildConfig.ItchIoConfig!, GetPlatformFallbackPath(buildConfig, "ItchIoDeployConfig.tres"));
         if (itchError != Error.Ok) return itchError;
         Error buildError = SaveResource(buildConfig, DefaultBuildConfigPath);
         if (buildError != Error.Ok) return buildError;
@@ -216,9 +215,25 @@ public static class DeployConfigStore
 
     private static Error SaveResource(Resource resource, string fallbackPath)
     {
-        string path = string.IsNullOrWhiteSpace(resource.ResourcePath) ? fallbackPath : resource.ResourcePath;
+        string path = string.IsNullOrWhiteSpace(resource.ResourcePath) || resource.ResourcePath.Contains("::", StringComparison.Ordinal)
+            ? fallbackPath
+            : resource.ResourcePath;
         EnsureResourceDirectory(path);
+        resource.TakeOverPath(path);
         return ResourceSaver.Save(resource, path);
+    }
+
+    private static string GetPlatformFallbackPath(BuildDeployConfig buildConfig, string defaultFileName)
+    {
+        if (string.IsNullOrWhiteSpace(buildConfig.ResourcePath))
+        {
+            return $"res://deploy/{defaultFileName}";
+        }
+
+        string directory = buildConfig.ResourcePath.GetBaseDir();
+        string buildName = buildConfig.ResourcePath.GetFile().GetBaseName();
+        string platform = defaultFileName.GetBaseName().Replace("DeployConfig", string.Empty, StringComparison.Ordinal);
+        return $"{directory}/{buildName}.{platform}.tres";
     }
 
     private static string LoadSelectedBuildConfigPath()

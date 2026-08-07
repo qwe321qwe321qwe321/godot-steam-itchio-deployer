@@ -103,8 +103,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         AddSection(root, "Configuration Assets");
         var resourceGrid = CreateGrid(root);
         _buildConfigPicker = AddResourceRow<BuildDeployConfig>(resourceGrid, "Build / Deploy Config", _buildConfig);
-        _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig);
-        _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig);
+        _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
+        _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
         _buildConfigPicker.ResourceChanged += OnBuildConfigChanged;
         _steamConfigPicker.ResourceChanged += OnSteamConfigChanged;
         _itchConfigPicker.ResourceChanged += OnItchConfigChanged;
