@@ -68,7 +68,45 @@ public static class VdfGenerator
         DateTime now = DateTime.Now;
         return value
             .Replace("{DateTime}", now.ToString("yyyy-MM-dd HH:mm:ss"), StringComparison.Ordinal)
-            .Replace("{Date}", now.ToString("yyyy-MM-dd"), StringComparison.Ordinal);
+            .Replace("{Date}", now.ToString("yyyy-MM-dd"), StringComparison.Ordinal)
+            .Replace("{GitSHA}", ResolveGitSha(), StringComparison.Ordinal);
+    }
+
+    public static string ResolveGitSha()
+    {
+        try
+        {
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "git",
+                WorkingDirectory = ProjectSettings.GlobalizePath("res://"),
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            startInfo.ArgumentList.Add("rev-parse");
+            startInfo.ArgumentList.Add("HEAD");
+
+            using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(startInfo);
+            if (process is null)
+            {
+                return "NO_SHA";
+            }
+
+            if (!process.WaitForExit(3000))
+            {
+                process.Kill(entireProcessTree: true);
+                return "NO_SHA";
+            }
+
+            string output = process.StandardOutput.ReadToEnd().Trim();
+            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : "NO_SHA";
+        }
+        catch (Exception)
+        {
+            return "NO_SHA";
+        }
     }
 
     public static string[] SplitPatterns(string value)

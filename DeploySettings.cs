@@ -20,7 +20,7 @@ public sealed class DeploySettings
     public string SteamCmdPath { get; set; } = string.Empty;
     public string SteamAppId { get; set; } = string.Empty;
     public string SteamDepotId { get; set; } = string.Empty;
-    public string SteamBuildDescription { get; set; } = "Godot build {DateTime}";
+    public string SteamBuildDescription { get; set; } = "Godot build {DateTime} - {GitSHA}";
     public bool SteamSetLive { get; set; }
     public string SteamBranch { get; set; } = "default";
     public string SteamIgnoreFiles { get; set; } = "*.pdb";

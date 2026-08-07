@@ -111,7 +111,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             out _steamDownloadButton);
         _steamAppId = AddLineRow(steamGrid, "App ID", settings.SteamAppId);
         _steamDepotId = AddLineRow(steamGrid, "Depot ID", settings.SteamDepotId);
-        _steamDescription = AddLineRow(steamGrid, "Build Description", settings.SteamBuildDescription, "Supports {Date} and {DateTime}");
+        _steamDescription = AddLineRow(
+            steamGrid,
+            "Build Description",
+            settings.SteamBuildDescription,
+            "Supports {Date}, {DateTime}, and {GitSHA}");
         _steamSetLive = AddCheckRow(steamGrid, "Set Live", settings.SteamSetLive);
         _steamBranch = AddLineRow(steamGrid, "Branch", settings.SteamBranch);
         _steamIgnore = AddLineRow(steamGrid, "Ignore Files", settings.SteamIgnoreFiles, "Comma-separated patterns");
@@ -1048,6 +1052,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} STEAM_LOGIN_TEST_BUTTON_PRESENT={_steamLoginTestButton is not null}");
         GD.Print($"{LogPrefix} EXPORT_PRESET_COUNT={_preset?.ItemCount}");
         GD.Print($"{LogPrefix} BUILD_WITH_DEBUG={_buildWithDebug?.ButtonPressed}");
+        string resolvedGitSha = VdfGenerator.ResolveGitSha();
+        GD.Print($"{LogPrefix} GIT_SHA_RESOLVED={resolvedGitSha != "NO_SHA"}");
+        GD.Print($"{LogPrefix} GIT_SHA_LENGTH={resolvedGitSha.Length}");
         GD.Print($"{LogPrefix} GUARD_PATTERN_MATCHES={CliProcessRunner.IsSteamGuardRequired("FAILED login with result code RequireTwoFactorCode")}");
 
         string missingPath = Path.Combine(
