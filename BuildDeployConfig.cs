@@ -1,6 +1,7 @@
 #if TOOLS
 #nullable enable
 using Godot;
+using SteamItchIoDeployerCore;
 
 namespace GodotSteamItchIoDeployer;
 

@@ -4,9 +4,15 @@ using System;
 using System.IO;
 using System.Text;
 using Godot;
+using SteamItchIoDeployerCore;
 
 namespace GodotSteamItchIoDeployer;
 
+/// <summary>
+/// Writes SteamCMD's app_build/depot_build VDF script files to disk. The VDF text itself is
+/// rendered by <see cref="VdfContentBuilder"/> in the shared core; this type only owns the
+/// Godot-specific file layout (res://.deployer/steam-vdf) and macro/git-SHA plumbing.
+/// </summary>
 public static class VdfGenerator
 {
     public static string Generate(DeploySettings settings, string contentRoot)
@@ -14,114 +20,59 @@ public static class VdfGenerator
         string outputDirectory = ProjectSettings.GlobalizePath("res://.deployer/steam-vdf");
         Directory.CreateDirectory(outputDirectory);
 
+        var options = new SteamVdfOptions
+        {
+            AppId = settings.SteamAppId,
+            DepotId = settings.SteamDepotId,
+            SetLiveEnabled = settings.SteamSetLive,
+            Branch = settings.SteamBranch,
+            IgnoreFiles = settings.SteamIgnoreFiles,
+        };
+
         string depotPath = Path.Combine(outputDirectory, $"depot_build_{settings.SteamDepotId}.vdf");
         string appPath = Path.Combine(outputDirectory, $"app_build_{settings.SteamAppId}.vdf");
-        File.WriteAllText(depotPath, BuildDepotVdf(settings), new UTF8Encoding(false));
-        File.WriteAllText(appPath, BuildAppVdf(settings, contentRoot, depotPath), new UTF8Encoding(false));
-        return appPath;
-    }
 
-    private static string BuildDepotVdf(DeploySettings settings)
-    {
-        var text = new StringBuilder();
-        text.AppendLine("\"DepotBuild\"");
-        text.AppendLine("{");
-        text.AppendLine($"\t\"DepotID\"\t\"{EscapeValue(settings.SteamDepotId)}\"");
-        text.AppendLine("\t\"FileMapping\"");
-        text.AppendLine("\t{");
-        text.AppendLine("\t\t\"LocalPath\"\t\"*\"");
-        text.AppendLine("\t\t\"DepotPath\"\t\".\"");
-        text.AppendLine("\t\t\"Recursive\"\t\"1\"");
-        text.AppendLine("\t}");
-        foreach (string pattern in SplitPatterns(settings.SteamIgnoreFiles))
-        {
-            text.AppendLine($"\t\"FileExclusion\"\t\"{EscapeValue(pattern)}\"");
-        }
+        File.WriteAllText(depotPath, VdfContentBuilder.BuildDepotVdfContent(options), new UTF8Encoding(false));
 
-        text.AppendLine("}");
-        return text.ToString();
-    }
-
-    private static string BuildAppVdf(DeploySettings settings, string contentRoot, string depotPath)
-    {
         string description = ResolveMacros(settings.SteamBuildDescription);
-        string branch = settings.SteamSetLive ? settings.SteamBranch : string.Empty;
-        var text = new StringBuilder();
-        text.AppendLine("\"AppBuild\"");
-        text.AppendLine("{");
-        text.AppendLine($"\t\"AppID\"\t\"{EscapeValue(settings.SteamAppId)}\"");
-        text.AppendLine($"\t\"Desc\"\t\"{EscapeValue(description)}\"");
-        text.AppendLine("\t\"Preview\"\t\"0\"");
-        text.AppendLine($"\t\"ContentRoot\"\t\"{EscapePath(contentRoot)}\"");
-        text.AppendLine($"\t\"BuildOutput\"\t\"{EscapePath(Path.GetDirectoryName(depotPath) ?? contentRoot)}\"");
-        text.AppendLine($"\t\"SetLive\"\t\"{EscapeValue(branch)}\"");
-        text.AppendLine("\t\"Depots\"");
-        text.AppendLine("\t{");
-        text.AppendLine($"\t\t\"{EscapeValue(settings.SteamDepotId)}\"\t\"{EscapePath(depotPath)}\"");
-        text.AppendLine("\t}");
-        text.AppendLine("}");
-        return text.ToString();
+        File.WriteAllText(
+            appPath,
+            VdfContentBuilder.BuildAppVdfContent(
+                options,
+                Path.GetFullPath(contentRoot),
+                Path.GetFullPath(outputDirectory),
+                description,
+                Path.GetFullPath(depotPath)),
+            new UTF8Encoding(false));
+
+        return appPath;
     }
 
     public static string ResolveMacros(string value)
     {
         DateTime now = DateTime.Now;
-        return value
-            .Replace("{DateTime}", now.ToString("yyyy-MM-dd HH:mm:ss"), StringComparison.Ordinal)
-            .Replace("{Date}", now.ToString("yyyy-MM-dd"), StringComparison.Ordinal)
-            .Replace("{GitSHA}", ResolveGitSha(), StringComparison.Ordinal);
+        return MacroResolver.Resolve(
+            value,
+            version: ResolveProjectVersion(),
+            dateText: now.ToString("yyyy-MM-dd"),
+            dateTimeText: now.ToString("yyyy-MM-dd HH:mm:ss"),
+            gitSha: ResolveGitSha());
     }
 
-    public static string ResolveGitSha()
+    /// <summary>
+    /// Reads the project's "application/config/version" ProjectSetting (Project Settings >
+    /// Application > Config > Version) for the shared <c>{Version}</c> macro. This macro was
+    /// previously unsupported here (only Unity's ResolveMacros substituted it); sharing
+    /// MacroResolver with Unity added it for free.
+    /// </summary>
+    private static string ResolveProjectVersion()
     {
-        try
-        {
-            var startInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "git",
-                WorkingDirectory = ProjectSettings.GlobalizePath("res://"),
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            };
-            startInfo.ArgumentList.Add("rev-parse");
-            startInfo.ArgumentList.Add("HEAD");
-
-            using System.Diagnostics.Process? process = System.Diagnostics.Process.Start(startInfo);
-            if (process is null)
-            {
-                return "NO_SHA";
-            }
-
-            if (!process.WaitForExit(3000))
-            {
-                process.Kill(entireProcessTree: true);
-                return "NO_SHA";
-            }
-
-            string output = process.StandardOutput.ReadToEnd().Trim();
-            return process.ExitCode == 0 && !string.IsNullOrWhiteSpace(output) ? output : "NO_SHA";
-        }
-        catch (Exception)
-        {
-            return "NO_SHA";
-        }
+        Variant version = ProjectSettings.GetSetting("application/config/version", "");
+        return version.AsString();
     }
 
-    public static string[] SplitPatterns(string value)
-    {
-        return value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-    }
+    public static string ResolveGitSha() => GitShaResolver.Resolve(ProjectSettings.GlobalizePath("res://"));
 
-    private static string EscapeValue(string value) => value.Replace("\"", "\\\"", StringComparison.Ordinal);
-
-    private static string EscapePath(string value)
-    {
-        string absolute = Path.GetFullPath(value);
-        return OperatingSystem.IsWindows()
-            ? absolute.Replace("/", "\\", StringComparison.Ordinal).Replace("\\", "\\\\", StringComparison.Ordinal)
-            : absolute.Replace("\\", "/", StringComparison.Ordinal);
-    }
+    public static string[] SplitPatterns(string value) => VdfContentBuilder.SplitIgnorePatterns(value);
 }
 #endif

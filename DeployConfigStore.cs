@@ -2,9 +2,9 @@
 #nullable enable
 using System;
 using System.IO;
-using System.Security.Cryptography;
 using System.Text;
 using Godot;
+using SteamItchIoDeployerCore;
 
 namespace GodotSteamItchIoDeployer;
 
@@ -256,7 +256,7 @@ public static class DeployConfigStore
     private static string DeriveMachinePassword()
     {
         string material = $"{OS.GetUniqueId()}|{ProjectSettings.GlobalizePath("res://")}|GodotSteamItchIoDeployer_v1";
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
+        return MachineKeyDerivation.Sha256Hex(material);
     }
 
     private static string GetProjectRoot() =>

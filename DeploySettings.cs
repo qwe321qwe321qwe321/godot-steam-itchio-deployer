@@ -1,14 +1,8 @@
 #if TOOLS
 #nullable enable
-namespace GodotSteamItchIoDeployer;
+using SteamItchIoDeployerCore;
 
-[System.Flags]
-public enum DeployTargets
-{
-    None = 0,
-    Steam = 1,
-    ItchIo = 2,
-}
+namespace GodotSteamItchIoDeployer;
 
 public sealed class DeploySettings
 {
