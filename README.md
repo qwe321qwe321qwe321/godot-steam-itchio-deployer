@@ -2,6 +2,9 @@
 
 Godot 4.7 .NET editor plugin that exports once and uploads the resulting directory to Steam and/or itch.io.
 
+<img width="1707" height="685" alt="image" src="https://github.com/user-attachments/assets/6a7d1084-ce07-4938-9e2c-8601a47fa543" />
+
+
 ## Requirements
 
 - Godot 4.7.1 .NET / Mono
