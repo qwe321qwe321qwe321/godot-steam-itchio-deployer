@@ -1,5 +1,10 @@
 # Godot Steam / itch.io Deployer
 
+This project is an unofficial, vibe-ported Godot version of
+[unity-steam-itchio-deployer](https://github.com/qwe321qwe321qwe321/unity-steam-itchio-deployer),
+ported for personal use with the help of AI coding assistants. Expect rough
+edges and use at your own risk.
+
 Godot 4.7 .NET editor plugin that exports once and uploads the resulting directory to Steam and/or itch.io.
 
 <img width="1707" height="685" alt="image" src="https://github.com/user-attachments/assets/6a7d1084-ce07-4938-9e2c-8601a47fa543" />
@@ -72,21 +77,6 @@ Official download sources:
 - SteamCMD: `https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip`
 - Butler broth channel: `https://broth.itch.zone/butler/<os>-<arch>/LATEST/archive/default`
 
-## Automated EditorPlugin probe
+## License
 
-Run this from a consuming Godot project after adding the submodule:
-
-```powershell
-dotnet build
-& 'C:\Users\PeDev\AppData\Roaming\godotenv\godot\versions\godot_dotnet_4_7_1_stable\Godot_v4.7.1-stable_mono_win64\Godot_v4.7.1-stable_mono_win64_console.exe' `
-  --path <consumer-project> --editor --headless --quit-after 10 -- --deployer-probe
-```
-
-A successful run prints:
-
-```text
-[GodotSteamItchIoDeployer] PLUGIN_LOADED
-[GodotSteamItchIoDeployer] PROBE_BUTTON_PRESSED
-```
-
-Use the Windows `_console.exe` binary when stdout needs to be captured. The `godotenv` `bin\godot.exe` symlink points to the GUI executable and does not forward its output to this PowerShell session.
+[MIT](LICENSE)
