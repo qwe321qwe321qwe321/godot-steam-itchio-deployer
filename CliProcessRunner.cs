@@ -5,9 +5,9 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using SteamItchIoDeployerCore;
 
 namespace GodotSteamItchIoDeployer;
 
@@ -18,16 +18,7 @@ public sealed record CliProcessResult(int ExitCode, string CombinedOutput, bool 
 
 public static class CliProcessRunner
 {
-    private static readonly Regex SteamGuardRequiredPattern = new(
-        "(not been authenticated for your account using Steam Guard|" +
-        "Steam Guard code:|" +
-        "Steam Guard code required|" +
-        "FAILED login with result code RequireTwoFactorCode|" +
-        "FAILED login with result code RequirePasswordEntry|" +
-        "Enter the current code from your Steam Guard)",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
-
-    public static bool IsSteamGuardRequired(string output) => SteamGuardRequiredPattern.IsMatch(output);
+    public static bool IsSteamGuardRequired(string output) => CliOutputClassifier.IsSteamGuardRequired(output);
 
     public static async Task<CliProcessResult> RunAsync(
         string executablePath,
