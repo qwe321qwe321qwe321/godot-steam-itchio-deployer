@@ -18,7 +18,27 @@ public sealed record CliProcessResult(int ExitCode, string CombinedOutput, bool 
 
 public static class CliProcessRunner
 {
+    private static readonly string[] GodotExportBuildFailureMarkers =
+    {
+        "Export .NET Project: Failed",
+        "Export .NET Project: Error",
+    };
+
     public static bool IsSteamGuardRequired(string output) => CliOutputClassifier.IsSteamGuardRequired(output);
+
+    public static bool IsGodotExportBuildFailure(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+            return false;
+
+        foreach (string marker in GodotExportBuildFailureMarkers)
+        {
+            if (output.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
 
     public static async Task<CliProcessResult> RunAsync(
         string executablePath,
