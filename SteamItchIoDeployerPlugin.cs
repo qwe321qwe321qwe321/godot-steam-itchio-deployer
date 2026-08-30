@@ -384,12 +384,18 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
     private async Task RunWorkflowAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload)
     {
+        string? stagingDirectory = null;
         try
         {
             string projectPath = ProjectSettings.GlobalizePath("res://");
             string outputPath = ResolveProjectPath(settings.ExportOutputPath, projectPath);
             string? outputDirectory = Path.GetDirectoryName(outputPath);
             if (string.IsNullOrWhiteSpace(outputDirectory))
+            {
+                throw new InvalidOperationException("Export output must include a file name.");
+            }
+            string outputFileName = Path.GetFileName(outputPath);
+            if (string.IsNullOrWhiteSpace(outputFileName))
             {
                 throw new InvalidOperationException("Export output must include a file name.");
             }
@@ -401,15 +407,38 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                     throw new InvalidOperationException("Select a Godot export preset before building.");
                 }
 
-                Directory.CreateDirectory(outputDirectory);
+                stagingDirectory = ExportArtifactValidator.CreateStagingDirectory(projectPath, outputDirectory);
+                string stagedOutputPath = Path.Combine(stagingDirectory, outputFileName);
                 string godotExecutable = OS.GetExecutablePath();
                 string exportMode = settings.BuildWithDebug ? "--export-debug" : "--export-release";
-                var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, outputPath };
-                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}) to {outputPath}");
+                var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, stagedOutputPath };
+                DateTime exportStartedUtc = DateTime.UtcNow;
+                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}) to staging output {stagedOutputPath}");
                 CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput).ConfigureAwait(false);
                 if (!result.Succeeded)
                 {
                     throw new InvalidOperationException($"Godot export failed with exit code {result.ExitCode}.");
+                }
+                if (CliProcessRunner.IsGodotExportBuildFailure(result.CombinedOutput))
+                {
+                    throw new InvalidOperationException("Godot reported a .NET build failure even though the export process returned exit code 0.");
+                }
+
+                ExportArtifactValidator.ValidateExportOutput(stagedOutputPath);
+                string expectedSha = VdfGenerator.ResolveGitSha();
+                string managedAssembly = ExportArtifactValidator.ValidateManagedAssembly(
+                    projectPath,
+                    settings.BuildWithDebug,
+                    expectedSha,
+                    exportStartedUtc);
+                ExportArtifactValidator.ValidatePackagedManagedAssemblies(stagingDirectory, expectedSha);
+                _pendingLogs.Enqueue($"Managed build verified: {Path.GetFileName(managedAssembly)} ({expectedSha})");
+
+                string? previousOutputBackup = ExportArtifactValidator.PromoteStagedBuild(stagingDirectory, outputDirectory);
+                stagingDirectory = null;
+                if (previousOutputBackup is not null)
+                {
+                    _pendingLogs.Enqueue($"WARNING: Previous build was kept as a recoverable backup: {previousOutputBackup}");
                 }
 
                 _pendingLogs.Enqueue("Build completed.");
@@ -446,6 +475,17 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
         finally
         {
+            if (stagingDirectory is not null)
+            {
+                try
+                {
+                    ExportArtifactValidator.CleanupStagingDirectory(stagingDirectory);
+                }
+                catch (Exception cleanupException)
+                {
+                    _pendingLogs.Enqueue($"WARNING: Could not clean export staging directory: {cleanupException.Message}");
+                }
+            }
             Interlocked.Exchange(ref _busy, 0);
         }
     }
@@ -1339,6 +1379,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         GD.Print($"{LogPrefix} GIT_SHA_RESOLVED={resolvedGitSha != "NO_SHA"}");
         GD.Print($"{LogPrefix} GIT_SHA_LENGTH={resolvedGitSha.Length}");
         GD.Print($"{LogPrefix} GUARD_PATTERN_MATCHES={CliProcessRunner.IsSteamGuardRequired("FAILED login with result code RequireTwoFactorCode")}");
+        GD.Print($"{LogPrefix} GODOT_EXPORT_FAILURE_MATCHES={CliProcessRunner.IsGodotExportBuildFailure("ERROR: Export .NET Project: Failed to build project")}");
 
         string missingPath = Path.Combine(
             ProjectSettings.GlobalizePath("res://.deployer/tools"),
