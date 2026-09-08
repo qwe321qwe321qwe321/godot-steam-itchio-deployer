@@ -47,7 +47,8 @@ public static class CliProcessRunner
         IReadOnlyDictionary<string, string>? environment,
         Action<string> onOutput,
         Func<string, bool>? terminateWhen = null,
-        string? watchedOutputFile = null)
+        string? watchedOutputFile = null,
+        CancellationToken cancellationToken = default)
     {
         long watchedFileOffset = GetFileLength(watchedOutputFile);
         var startInfo = new ProcessStartInfo
@@ -102,6 +103,8 @@ public static class CliProcessRunner
             }
         }
 
+        using CancellationTokenRegistration cancelRegistration = cancellationToken.Register(TerminateProcess);
+
         var combined = new StringBuilder();
         using var watcherCancellation = new CancellationTokenSource();
         Task stdout = PumpAsync(process.StandardOutput, combined, onOutput, terminateWhen, TerminateProcess);
@@ -115,6 +118,7 @@ public static class CliProcessRunner
         await Task.WhenAll(process.WaitForExitAsync(), stdout, stderr).ConfigureAwait(false);
         watcherCancellation.Cancel();
         await watchedOutput.ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         return new CliProcessResult(process.ExitCode, combined.ToString(), Volatile.Read(ref terminatedByPattern) != 0);
     }
 
