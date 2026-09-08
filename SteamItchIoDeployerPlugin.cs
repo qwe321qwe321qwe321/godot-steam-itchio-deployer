@@ -700,7 +700,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         string projectPath = ProjectSettings.GlobalizePath("res://");
         _pendingLogs.Enqueue($"=== BATCH START: {configs.Count} config(s) ===");
-        DateTime? lastUploadCompletedUtc = null;
+
+        // Steam's cooldown is a per-AppID limit, not a global one — batching AppID A then AppID B
+        // should not make B wait on A's timer. Keyed by SteamAppId; itch-only configs never wait.
+        var lastSteamUploadCompletedUtcByAppId = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
         for (int i = 0; i < configs.Count; i++)
         {
@@ -726,41 +729,60 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             }
 
             _pendingLogs.Enqueue($"--- Config [{i + 1}/{configs.Count}]: {label} ---");
-            _batchStatusText = $"{(build ? "Building" : "Uploading")} {label}...";
 
-            if (upload && lastUploadCompletedUtc is not null)
+            // Build and upload are two separate RunWorkflowCoreAsync calls (instead of one build+upload
+            // call) specifically so the cooldown wait below can sit between them — right before this
+            // config's upload starts, not before its build does.
+            if (build)
             {
-                double cooldownSeconds = Math.Max(1, cfg.UploadCooldownSeconds);
-                double elapsed = (DateTime.UtcNow - lastUploadCompletedUtc.Value).TotalSeconds;
-                double remaining = cooldownSeconds - elapsed;
-                if (remaining > 0)
+                _batchStatusText = $"Building {label}...";
+                bool builtOk = await RunWorkflowCoreAsync(itemSettings, credentials, build: true, upload: false, cancellationToken).ConfigureAwait(false);
+                if (!builtOk)
                 {
-                    int remainingSeconds = (int)Math.Ceiling(remaining);
-                    _pendingLogs.Enqueue($"Waiting {remainingSeconds}s before upload to avoid Steam rate limits...");
-                    _batchStatusText = $"Waiting {remainingSeconds}s before uploading {label}...";
-                    try
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(remaining), cancellationToken).ConfigureAwait(false);
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        _pendingLogs.Enqueue($"=== BATCH CANCELLED while waiting to upload config [{i + 1}/{configs.Count}]: {label} ===");
-                        return;
-                    }
-
-                    _batchStatusText = $"Uploading {label}...";
+                    string reason = cancellationToken.IsCancellationRequested ? "CANCELLED" : "ABORTED";
+                    _pendingLogs.Enqueue($"=== BATCH {reason} at config [{i + 1}/{configs.Count}]: {label} (build) ===");
+                    return;
                 }
             }
 
-            bool succeeded = await RunWorkflowCoreAsync(itemSettings, credentials, build, upload, cancellationToken).ConfigureAwait(false);
-            if (!succeeded)
+            if (upload)
             {
-                string reason = cancellationToken.IsCancellationRequested ? "CANCELLED" : "ABORTED";
-                _pendingLogs.Enqueue($"=== BATCH {reason} at config [{i + 1}/{configs.Count}]: {label} ===");
-                return;
+                bool hasSteamAppId = itemSettings.Targets.HasFlag(DeployTargets.Steam) &&
+                    !string.IsNullOrWhiteSpace(itemSettings.SteamAppId);
+                if (hasSteamAppId && lastSteamUploadCompletedUtcByAppId.TryGetValue(itemSettings.SteamAppId, out DateTime lastCompletedUtc))
+                {
+                    double cooldownSeconds = Math.Max(1, cfg.UploadCooldownSeconds);
+                    double elapsed = (DateTime.UtcNow - lastCompletedUtc).TotalSeconds;
+                    double remaining = cooldownSeconds - elapsed;
+                    if (remaining > 0)
+                    {
+                        int remainingSeconds = (int)Math.Ceiling(remaining);
+                        _pendingLogs.Enqueue($"Waiting {remainingSeconds}s before uploading {label} to avoid Steam rate limits on App ID {itemSettings.SteamAppId}...");
+                        _batchStatusText = $"Waiting {remainingSeconds}s before uploading {label}...";
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(remaining), cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            _pendingLogs.Enqueue($"=== BATCH CANCELLED while waiting to upload config [{i + 1}/{configs.Count}]: {label} ===");
+                            return;
+                        }
+                    }
+                }
+
+                _batchStatusText = $"Uploading {label}...";
+                bool uploadedOk = await RunWorkflowCoreAsync(itemSettings, credentials, build: false, upload: true, cancellationToken).ConfigureAwait(false);
+                if (!uploadedOk)
+                {
+                    string reason = cancellationToken.IsCancellationRequested ? "CANCELLED" : "ABORTED";
+                    _pendingLogs.Enqueue($"=== BATCH {reason} at config [{i + 1}/{configs.Count}]: {label} (upload) ===");
+                    return;
+                }
+
+                if (hasSteamAppId) lastSteamUploadCompletedUtcByAppId[itemSettings.SteamAppId] = DateTime.UtcNow;
             }
 
-            if (upload) lastUploadCompletedUtc = DateTime.UtcNow;
             _pendingLogs.Enqueue($"=== Config [{i + 1}/{configs.Count}] complete ===");
         }
 
