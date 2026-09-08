@@ -20,6 +20,11 @@ public partial class BuildDeployConfig : Resource
     [Export]
     public bool BuildWithDebug { get; set; }
 
+    // Steam can reject a depot upload submitted too soon after the previous one; batch runs wait
+    // this long after an upload before starting the next config's upload.
+    [Export]
+    public int UploadCooldownSeconds { get; set; } = 120;
+
     [Export]
     public SteamDeployConfig? SteamConfig { get; set; }
 

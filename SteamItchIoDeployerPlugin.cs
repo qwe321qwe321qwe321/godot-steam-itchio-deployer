@@ -63,14 +63,40 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private Button? _buildButton;
     private Button? _uploadButton;
     private Button? _buildUploadButton;
+    private Button? _cancelButton;
+    private Button? _batchCancelButton;
     private RichTextLabel? _log;
     private int _busy;
+    private CancellationTokenSource? _operationCts;
     private bool _quitAfterToolInstall;
     private bool _guardUiProbePending;
     private string _presetFileStamp = string.Empty;
     private DeploySettings? _savedSettings;
     private BuildDeployConfig? _buildConfig;
     private bool _resourceAssignmentsDirty;
+
+    // Main tab toolbar (Deploy vs. Batch Build & Upload).
+    private enum MainTab { Deploy, Batch }
+    private MainTab _mainTab = MainTab.Deploy;
+    private VBoxContainer? _deployTabContent;
+    private VBoxContainer? _batchTabContent;
+
+    // Batch build/upload state. Slots may be temporarily unassigned (null) while the user is
+    // still picking a config, mirroring the reference Unity implementation's batch list.
+    private readonly List<BuildDeployConfig?> _batchConfigs = new();
+    private VBoxContainer? _batchListContainer;
+    private Button? _batchAddButton;
+    private Button? _batchBuildOnlyButton;
+    private Button? _batchUploadOnlyButton;
+    private Button? _batchBuildUploadButton;
+    private Label? _batchUploadOnlyInfoLabel;
+    private Label? _batchGeneralHintLabel;
+    private Label? _batchProgressLabel;
+    private ProgressBar? _batchProgressBar;
+    private bool _isBatchMode;
+    private int _batchCurrentIndex;
+    private int _batchCount;
+    private string _batchStatusText = string.Empty;
 
     public override void _EnterTree()
     {
@@ -102,17 +128,51 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         root.AddChild(new Label { Text = "Godot Steam / itch.io Deployer" });
         root.AddChild(new Label { Text = "Build once, then upload the exported directory to the selected services." });
 
-        var buildConfigGrid = CreateGrid(root);
+        var tabBar = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        root.AddChild(tabBar);
+        var mainTabGroup = new ButtonGroup();
+        Button deployTabButton = new()
+        {
+            Text = "Deploy",
+            ToggleMode = true,
+            ButtonPressed = true,
+            ButtonGroup = mainTabGroup,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        Button batchTabButton = new()
+        {
+            Text = "Batch Build & Upload",
+            ToggleMode = true,
+            ButtonGroup = mainTabGroup,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        deployTabButton.Toggled += pressed => { if (pressed) SetMainTab(MainTab.Deploy); };
+        batchTabButton.Toggled += pressed => { if (pressed) SetMainTab(MainTab.Batch); };
+        tabBar.AddChild(deployTabButton);
+        tabBar.AddChild(batchTabButton);
+
+        _deployTabContent = new VBoxContainer
+        {
+            Name = "DeployTabContent",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        root.AddChild(_deployTabContent);
+
+        var buildConfigGrid = CreateGrid(_deployTabContent);
         _buildConfigPicker = AddResourceRow<BuildDeployConfig>(buildConfigGrid, "Build / Deploy Config", _buildConfig);
 
         var actionButtons = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-        root.AddChild(actionButtons);
+        _deployTabContent.AddChild(actionButtons);
         _saveSettingsButton = new Button { Text = "Save Settings" };
         _saveSettingsButton.Pressed += SaveSettingsPressed;
         actionButtons.AddChild(_saveSettingsButton);
         _buildButton = AddButton(actionButtons, "Build", () => StartWorkflow(build: true, upload: false));
         _uploadButton = AddButton(actionButtons, "Upload", () => StartWorkflow(build: false, upload: true));
         _buildUploadButton = AddButton(actionButtons, "Build & Upload", () => StartWorkflow(build: true, upload: true));
+        _cancelButton = new Button { Text = "Cancel", Disabled = true };
+        _cancelButton.Pressed += CancelCurrentOperation;
+        actionButtons.AddChild(_cancelButton);
 
         var scroll = new ScrollContainer
         {
@@ -120,7 +180,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             SizeFlagsVertical = Control.SizeFlags.ExpandFill,
         };
-        root.AddChild(scroll);
+        _deployTabContent.AddChild(scroll);
         _settingsColumns = new HBoxContainer
         {
             Name = "DeployerSettingsColumns",
@@ -223,6 +283,16 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         saveItchCredentials.Pressed += SaveCredentialsPressed;
         AddRow(itchGrid, string.Empty, saveItchCredentials);
 
+        _batchTabContent = new VBoxContainer
+        {
+            Name = "BatchTabContent",
+            Visible = false,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill,
+        };
+        root.AddChild(_batchTabContent);
+        BuildBatchTabUi(_batchTabContent);
+
         _consoleContent = AddFoldoutSection(root, "Console Result", out _consoleFoldoutButton, expanded: false);
         _log = new RichTextLabel
         {
@@ -290,6 +360,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     public override void _ExitTree()
     {
         SetProcess(false);
+        _operationCts?.Cancel();
+        ClearOperationCts();
         if (_dock is not null && IsInstanceValid(_dock))
         {
             RemoveDock(_dock);
@@ -300,6 +372,466 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _log = null;
         _steamGuardCompletion?.TrySetResult(null);
         _steamGuardCompletion = null;
+    }
+
+    private void SetMainTab(MainTab tab)
+    {
+        _mainTab = tab;
+        if (_deployTabContent is not null) _deployTabContent.Visible = tab == MainTab.Deploy;
+        if (_batchTabContent is not null) _batchTabContent.Visible = tab == MainTab.Batch;
+    }
+
+    private void BuildBatchTabUi(VBoxContainer parent)
+    {
+        parent.AddChild(new Label
+        {
+            Text = "Add multiple Build/Deploy configs. Each one is built and uploaded in sequence using the credentials from the Deploy tab.",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+        });
+
+        var batchListScroll = new ScrollContainer
+        {
+            CustomMinimumSize = new Vector2(0, 160),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        parent.AddChild(batchListScroll);
+        _batchListContainer = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        batchListScroll.AddChild(_batchListContainer);
+
+        _batchAddButton = new Button { Text = "+ Add Config" };
+        _batchAddButton.Pressed += () =>
+        {
+            _batchConfigs.Add(null);
+            SaveBatchConfigsToStore();
+            RebuildBatchList();
+        };
+        parent.AddChild(_batchAddButton);
+        parent.AddChild(new HSeparator());
+
+        _batchProgressLabel = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
+        parent.AddChild(_batchProgressLabel);
+        _batchProgressBar = new ProgressBar { Visible = false, ShowPercentage = false };
+        parent.AddChild(_batchProgressBar);
+
+        var batchButtons = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        parent.AddChild(batchButtons);
+        _batchBuildOnlyButton = AddButton(batchButtons, "Batch Build Only", () => { _ = StartBatchAsync(build: true, upload: false); });
+        _batchUploadOnlyButton = AddButton(batchButtons, "Batch Upload Only", () => { _ = StartBatchAsync(build: false, upload: true); });
+        _batchBuildUploadButton = AddButton(batchButtons, "Batch Build & Upload", () => { _ = StartBatchAsync(build: true, upload: true); });
+        _batchCancelButton = new Button { Text = "Cancel", Disabled = true };
+        _batchCancelButton.Pressed += CancelCurrentOperation;
+        batchButtons.AddChild(_batchCancelButton);
+
+        _batchUploadOnlyInfoLabel = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, Visible = false };
+        parent.AddChild(_batchUploadOnlyInfoLabel);
+        _batchGeneralHintLabel = new Label { AutowrapMode = TextServer.AutowrapMode.WordSmart, Visible = false };
+        parent.AddChild(_batchGeneralHintLabel);
+
+        parent.AddChild(new HSeparator());
+        parent.AddChild(new Label { Text = "Batch uses the same Steam credentials and itch.io API key set in the Deploy tab." });
+
+        LoadBatchConfigsFromStore();
+        RebuildBatchList();
+    }
+
+    private void RebuildBatchList()
+    {
+        if (_batchListContainer is null) return;
+        foreach (Node child in _batchListContainer.GetChildren())
+        {
+            _batchListContainer.RemoveChild(child);
+            child.QueueFree();
+        }
+
+        for (int i = 0; i < _batchConfigs.Count; i++)
+        {
+            int index = i;
+            var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            row.AddChild(new Label { Text = $"{index + 1}.", CustomMinimumSize = new Vector2(24, 0) });
+
+            var picker = new EditorResourcePicker
+            {
+                BaseType = nameof(BuildDeployConfig),
+                EditedResource = _batchConfigs[index],
+                Editable = true,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            };
+            picker.ResourceChanged += resource =>
+            {
+                _batchConfigs[index] = resource as BuildDeployConfig;
+                SaveBatchConfigsToStore();
+            };
+            row.AddChild(picker);
+
+            Button upButton = new() { Text = "↑", Disabled = index == 0 };
+            upButton.Pressed += () => MoveBatchConfig(index, -1);
+            row.AddChild(upButton);
+
+            Button downButton = new() { Text = "↓", Disabled = index == _batchConfigs.Count - 1 };
+            downButton.Pressed += () => MoveBatchConfig(index, 1);
+            row.AddChild(downButton);
+
+            Button removeButton = new() { Text = "✕" };
+            removeButton.Pressed += () => RemoveBatchConfig(index);
+            row.AddChild(removeButton);
+
+            _batchListContainer.AddChild(row);
+        }
+    }
+
+    private void MoveBatchConfig(int index, int delta)
+    {
+        int target = index + delta;
+        if (target < 0 || target >= _batchConfigs.Count) return;
+        (_batchConfigs[index], _batchConfigs[target]) = (_batchConfigs[target], _batchConfigs[index]);
+        SaveBatchConfigsToStore();
+        RebuildBatchList();
+    }
+
+    private void RemoveBatchConfig(int index)
+    {
+        if (index < 0 || index >= _batchConfigs.Count) return;
+        _batchConfigs.RemoveAt(index);
+        SaveBatchConfigsToStore();
+        RebuildBatchList();
+    }
+
+    private void LoadBatchConfigsFromStore()
+    {
+        _batchConfigs.Clear();
+        foreach (string path in DeployConfigStore.LoadBatchConfigPaths())
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                _batchConfigs.Add(null);
+                continue;
+            }
+
+            _batchConfigs.Add(ResourceLoader.Exists(path) ? ResourceLoader.Load<BuildDeployConfig>(path) : null);
+        }
+    }
+
+    private void SaveBatchConfigsToStore()
+    {
+        var paths = new List<string>();
+        foreach (BuildDeployConfig? cfg in _batchConfigs)
+        {
+            paths.Add(cfg is not null && !string.IsNullOrWhiteSpace(cfg.ResourcePath) ? cfg.ResourcePath : string.Empty);
+        }
+
+        DeployConfigStore.SaveBatchConfigPaths(paths);
+    }
+
+    // Non-throwing counterpart of ResolveProjectPath, safe to poll every frame for the batch
+    // tab's "ready to upload" status and for the overwrite-confirmation dialog.
+    private static string? TryResolveOutputDirectory(DeploySettings settings, string projectPath)
+    {
+        if (string.IsNullOrWhiteSpace(settings.ExportOutputPath)) return null;
+        try
+        {
+            string outputPath = Path.GetFullPath(Path.IsPathRooted(settings.ExportOutputPath)
+                ? settings.ExportOutputPath
+                : Path.Combine(projectPath, settings.ExportOutputPath));
+            return Path.GetDirectoryName(outputPath);
+        }
+        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+    }
+
+    private void UpdateBatchUiState()
+    {
+        bool busy = Volatile.Read(ref _busy) != 0;
+        string projectPath = ProjectSettings.GlobalizePath("res://");
+        bool hasConfigs = _batchConfigs.Count > 0;
+        bool allAssigned = hasConfigs && _batchConfigs.TrueForAll(c => c is not null);
+
+        int uploadableCount = 0;
+        var missingNames = new List<string>();
+        int assignedCount = 0;
+        if (allAssigned)
+        {
+            foreach (BuildDeployConfig? cfg in _batchConfigs)
+            {
+                if (cfg is null) continue;
+                assignedCount++;
+                DeploySettings itemSettings = DeployConfigStore.ToSettings(cfg);
+                string? outputDirectory = TryResolveOutputDirectory(itemSettings, projectPath);
+                if (outputDirectory is not null && Directory.Exists(outputDirectory))
+                {
+                    uploadableCount++;
+                }
+                else
+                {
+                    missingNames.Add(string.IsNullOrWhiteSpace(cfg.ResourcePath) ? "(unsaved config)" : cfg.ResourcePath.GetFile());
+                }
+            }
+        }
+
+        if (_batchAddButton is not null) _batchAddButton.Disabled = busy;
+        if (_batchBuildOnlyButton is not null) _batchBuildOnlyButton.Disabled = busy || !allAssigned;
+        if (_batchBuildUploadButton is not null) _batchBuildUploadButton.Disabled = busy || !allAssigned;
+        if (_batchUploadOnlyButton is not null) _batchUploadOnlyButton.Disabled = busy || !allAssigned || uploadableCount == 0;
+        if (_batchCancelButton is not null) _batchCancelButton.Disabled = !busy;
+
+        if (_batchGeneralHintLabel is not null)
+        {
+            if (!hasConfigs)
+            {
+                _batchGeneralHintLabel.Visible = true;
+                _batchGeneralHintLabel.Text = "Add at least one Build/Deploy config to run a batch.";
+            }
+            else if (!allAssigned)
+            {
+                _batchGeneralHintLabel.Visible = true;
+                _batchGeneralHintLabel.Text = "All config slots must be assigned before running.";
+            }
+            else
+            {
+                _batchGeneralHintLabel.Visible = false;
+            }
+        }
+
+        if (_batchUploadOnlyInfoLabel is not null)
+        {
+            if (!allAssigned || assignedCount == 0)
+            {
+                _batchUploadOnlyInfoLabel.Visible = false;
+            }
+            else if (missingNames.Count == assignedCount)
+            {
+                _batchUploadOnlyInfoLabel.Visible = true;
+                _batchUploadOnlyInfoLabel.Text = "No uploadable configs — build output path does not exist for any config.";
+            }
+            else if (missingNames.Count > 0)
+            {
+                _batchUploadOnlyInfoLabel.Visible = true;
+                _batchUploadOnlyInfoLabel.Text = $"Build output not found for: {string.Join(", ", missingNames)}. These will be skipped.";
+            }
+            else
+            {
+                _batchUploadOnlyInfoLabel.Visible = true;
+                _batchUploadOnlyInfoLabel.Text = "All configs have existing build output and are ready to upload.";
+            }
+        }
+
+        if (_batchProgressLabel is not null)
+        {
+            _batchProgressLabel.Visible = _isBatchMode;
+            _batchProgressLabel.Text = _isBatchMode ? $"[{_batchCurrentIndex + 1}/{_batchCount}] {_batchStatusText}" : string.Empty;
+        }
+
+        if (_batchProgressBar is not null)
+        {
+            _batchProgressBar.Visible = _isBatchMode;
+            _batchProgressBar.Value = _batchCount > 0 ? 100.0 * _batchCurrentIndex / _batchCount : 0.0;
+        }
+    }
+
+    private async Task StartBatchAsync(bool build, bool upload)
+    {
+        if (Interlocked.CompareExchange(ref _busy, 1, 0) != 0)
+        {
+            AppendLog("Another deployment operation is already running.");
+            return;
+        }
+
+        try
+        {
+            List<BuildDeployConfig> configs = new();
+            foreach (BuildDeployConfig? cfg in _batchConfigs)
+            {
+                if (cfg is null)
+                {
+                    AppendLog("All batch slots must be assigned before running.");
+                    return;
+                }
+
+                configs.Add(cfg);
+            }
+
+            if (configs.Count == 0)
+            {
+                AppendLog("Add at least one Build/Deploy config to run a batch.");
+                return;
+            }
+
+            // Everything below can suspend across the confirmation dialog's await and resume off
+            // the main thread (the completion source is deliberately RunContinuationsAsynchronously),
+            // so grab every UI-derived value and touch every UI widget before that await, then talk
+            // to the UI only through the thread-safe _pendingLogs/_pendingUiActions queues afterward.
+            ExpandConsoleResult();
+            DeployCredentials credentials = ReadCredentialsFromUi();
+
+            if (build)
+            {
+                bool confirmed = await ConfirmBatchOutputPathsOverwriteAsync(configs).ConfigureAwait(false);
+                if (!confirmed)
+                {
+                    _pendingLogs.Enqueue("Batch cancelled.");
+                    return;
+                }
+            }
+
+            CancellationToken cancellationToken = BeginOperation();
+            _isBatchMode = true;
+            _batchCurrentIndex = 0;
+            _batchCount = configs.Count;
+            _batchStatusText = "Starting...";
+            _pendingLogs.Enqueue($"Starting Batch {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
+            await RunBatchAsync(configs, credentials, build, upload, skipMissingOutput: !build && upload, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _isBatchMode = false;
+            ClearOperationCts();
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private async Task RunBatchAsync(
+        List<BuildDeployConfig> configs,
+        DeployCredentials credentials,
+        bool build,
+        bool upload,
+        bool skipMissingOutput,
+        CancellationToken cancellationToken)
+    {
+        string projectPath = ProjectSettings.GlobalizePath("res://");
+        _pendingLogs.Enqueue($"=== BATCH START: {configs.Count} config(s) ===");
+        DateTime? lastUploadCompletedUtc = null;
+
+        for (int i = 0; i < configs.Count; i++)
+        {
+            _batchCurrentIndex = i;
+            BuildDeployConfig cfg = configs[i];
+            DeploySettings itemSettings = DeployConfigStore.ToSettings(cfg);
+            string label = string.IsNullOrWhiteSpace(cfg.ResourcePath) ? $"Config {i + 1}" : cfg.ResourcePath.GetFile();
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                _pendingLogs.Enqueue($"=== BATCH CANCELLED before config [{i + 1}/{configs.Count}]: {label} ===");
+                return;
+            }
+
+            if (skipMissingOutput)
+            {
+                string? outputDirectory = TryResolveOutputDirectory(itemSettings, projectPath);
+                if (outputDirectory is null || !Directory.Exists(outputDirectory))
+                {
+                    _pendingLogs.Enqueue($"--- Config [{i + 1}/{configs.Count}]: {label} — SKIPPED (build output not found: {outputDirectory}) ---");
+                    continue;
+                }
+            }
+
+            _pendingLogs.Enqueue($"--- Config [{i + 1}/{configs.Count}]: {label} ---");
+            _batchStatusText = $"{(build ? "Building" : "Uploading")} {label}...";
+
+            if (upload && lastUploadCompletedUtc is not null)
+            {
+                double cooldownSeconds = Math.Max(1, cfg.UploadCooldownSeconds);
+                double elapsed = (DateTime.UtcNow - lastUploadCompletedUtc.Value).TotalSeconds;
+                double remaining = cooldownSeconds - elapsed;
+                if (remaining > 0)
+                {
+                    int remainingSeconds = (int)Math.Ceiling(remaining);
+                    _pendingLogs.Enqueue($"Waiting {remainingSeconds}s before upload to avoid Steam rate limits...");
+                    _batchStatusText = $"Waiting {remainingSeconds}s before uploading {label}...";
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(remaining), cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        _pendingLogs.Enqueue($"=== BATCH CANCELLED while waiting to upload config [{i + 1}/{configs.Count}]: {label} ===");
+                        return;
+                    }
+
+                    _batchStatusText = $"Uploading {label}...";
+                }
+            }
+
+            bool succeeded = await RunWorkflowCoreAsync(itemSettings, credentials, build, upload, cancellationToken).ConfigureAwait(false);
+            if (!succeeded)
+            {
+                string reason = cancellationToken.IsCancellationRequested ? "CANCELLED" : "ABORTED";
+                _pendingLogs.Enqueue($"=== BATCH {reason} at config [{i + 1}/{configs.Count}]: {label} ===");
+                return;
+            }
+
+            if (upload) lastUploadCompletedUtc = DateTime.UtcNow;
+            _pendingLogs.Enqueue($"=== Config [{i + 1}/{configs.Count}] complete ===");
+        }
+
+        _pendingLogs.Enqueue($"=== BATCH COMPLETE: all {configs.Count} config(s) processed ===");
+    }
+
+    private async Task<bool> ConfirmBatchOutputPathsOverwriteAsync(List<BuildDeployConfig> configs)
+    {
+        string projectPath = ProjectSettings.GlobalizePath("res://");
+        var configsByPath = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (BuildDeployConfig cfg in configs)
+        {
+            DeploySettings itemSettings = DeployConfigStore.ToSettings(cfg);
+            string? outputDirectory = TryResolveOutputDirectory(itemSettings, projectPath);
+            if (string.IsNullOrWhiteSpace(outputDirectory)) continue;
+
+            string normalizedPath = Path.GetFullPath(outputDirectory);
+            if (!configsByPath.TryGetValue(normalizedPath, out List<string>? names))
+            {
+                names = new List<string>();
+                configsByPath[normalizedPath] = names;
+            }
+
+            names.Add(string.IsNullOrWhiteSpace(cfg.ResourcePath) ? "(unsaved config)" : cfg.ResourcePath.GetFile());
+        }
+
+        var warnings = new List<string>();
+        foreach ((string path, List<string> names) in configsByPath)
+        {
+            bool containsFiles = Directory.Exists(path) && Directory.EnumerateFileSystemEntries(path).Any();
+            bool sharedByMultipleConfigs = names.Count > 1;
+            if (!containsFiles && !sharedByMultipleConfigs) continue;
+
+            var reasons = new List<string>();
+            if (containsFiles) reasons.Add("already contains files");
+            if (sharedByMultipleConfigs) reasons.Add("is shared by multiple batch configs");
+            warnings.Add($"{string.Join(", ", names)}\n{path}\n({string.Join("; ", reasons)})");
+        }
+
+        if (warnings.Count == 0) return true;
+
+        string message = "The following batch build output folders may be overwritten:\n\n" +
+            string.Join("\n\n", warnings) +
+            "\n\nConfirm all output paths now and continue with the entire batch?";
+        return await ShowConfirmationDialogAsync("Build Output Paths Need Confirmation", message).ConfigureAwait(false);
+    }
+
+    private Task<bool> ShowConfirmationDialogAsync(string title, string message)
+    {
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dialog = new ConfirmationDialog
+        {
+            Title = title,
+            DialogText = message,
+            OkButtonText = "Continue",
+            CancelButtonText = "Cancel",
+        };
+        dialog.Confirmed += () => completion.TrySetResult(true);
+        dialog.Canceled += () => completion.TrySetResult(false);
+        dialog.CloseRequested += () => completion.TrySetResult(false);
+        (_dock ?? (Node?)GetTree().Root)?.AddChild(dialog);
+        dialog.PopupCentered(new Vector2I(520, 320));
+
+        _ = completion.Task.ContinueWith(
+            _ => _pendingUiActions.Enqueue(() =>
+            {
+                if (IsInstanceValid(dialog)) dialog.QueueFree();
+            }),
+            TaskScheduler.Default);
+
+        return completion.Task;
     }
 
     private void StartWorkflow(bool build, bool upload)
@@ -324,8 +856,9 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         _savedSettings = CloneSettings(settings);
 
+        CancellationToken cancellationToken = BeginOperation();
         AppendLog($"Starting {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
-        _ = RunWorkflowAsync(settings, credentials, build, upload);
+        _ = RunWorkflowAsync(settings, credentials, build, upload, cancellationToken);
     }
 
     private void StartToolInstall(DeployToolKind tool)
@@ -382,11 +915,50 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
     }
 
-    private async Task RunWorkflowAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload)
+    private async Task RunWorkflowAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RunWorkflowCoreAsync(settings, credentials, build, upload, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            ClearOperationCts();
+            Interlocked.Exchange(ref _busy, 0);
+        }
+    }
+
+    private CancellationToken BeginOperation()
+    {
+        _operationCts?.Dispose();
+        _operationCts = new CancellationTokenSource();
+        return _operationCts.Token;
+    }
+
+    private void ClearOperationCts()
+    {
+        _operationCts?.Dispose();
+        _operationCts = null;
+    }
+
+    private void CancelCurrentOperation()
+    {
+        if (_operationCts is { IsCancellationRequested: false } cts)
+        {
+            AppendLog("Cancellation requested...");
+            cts.Cancel();
+        }
+    }
+
+    // Shared by the single Build/Upload/Build & Upload buttons and the batch loop. Unlike
+    // RunWorkflowAsync, this does not own the `_busy` flag or the console log's error framing —
+    // the batch loop needs the boolean result to decide whether to abort the rest of the run.
+    private async Task<bool> RunWorkflowCoreAsync(DeploySettings settings, DeployCredentials credentials, bool build, bool upload, CancellationToken cancellationToken)
     {
         string? stagingDirectory = null;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             string projectPath = ProjectSettings.GlobalizePath("res://");
             string outputPath = ResolveProjectPath(settings.ExportOutputPath, projectPath);
             string? outputDirectory = Path.GetDirectoryName(outputPath);
@@ -414,7 +986,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, stagedOutputPath };
                 DateTime exportStartedUtc = DateTime.UtcNow;
                 _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}) to staging output {stagedOutputPath}");
-                CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput).ConfigureAwait(false);
+                CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput, cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded)
                 {
                     throw new InvalidOperationException($"Godot export failed with exit code {result.ExitCode}.");
@@ -458,20 +1030,27 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
                 if (settings.Targets.HasFlag(DeployTargets.Steam))
                 {
-                    await UploadSteamAsync(settings, credentials, outputDirectory, projectPath).ConfigureAwait(false);
+                    await UploadSteamAsync(settings, credentials, outputDirectory, projectPath, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (settings.Targets.HasFlag(DeployTargets.ItchIo))
                 {
-                    await UploadItchAsync(settings, credentials, outputDirectory, projectPath).ConfigureAwait(false);
+                    await UploadItchAsync(settings, credentials, outputDirectory, projectPath, cancellationToken).ConfigureAwait(false);
                 }
             }
 
             _pendingLogs.Enqueue("Workflow completed successfully.");
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            _pendingLogs.Enqueue("Cancelled by user.");
+            return false;
         }
         catch (Exception exception)
         {
             _pendingLogs.Enqueue($"ERROR: {exception.Message}");
+            return false;
         }
         finally
         {
@@ -486,11 +1065,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                     _pendingLogs.Enqueue($"WARNING: Could not clean export staging directory: {cleanupException.Message}");
                 }
             }
-            Interlocked.Exchange(ref _busy, 0);
         }
     }
 
-    private async Task UploadSteamAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory)
+    private async Task UploadSteamAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory, CancellationToken cancellationToken)
     {
         Require(settings.SteamAppId, "Steam App ID");
         Require(settings.SteamDepotId, "Steam Depot ID");
@@ -504,7 +1082,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             credentials,
             new[] { "+run_app_build", vdfPath },
             workingDirectory,
-            "Steam upload").ConfigureAwait(false);
+            "Steam upload",
+            cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException($"SteamCMD failed with exit code {result.ExitCode}.");
@@ -521,10 +1100,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             return;
         }
 
-        _ = RunSteamLoginTestAsync(ReadSettingsFromUi(), ReadCredentialsFromUi());
+        CancellationToken cancellationToken = BeginOperation();
+        _ = RunSteamLoginTestAsync(ReadSettingsFromUi(), ReadCredentialsFromUi(), cancellationToken);
     }
 
-    private async Task RunSteamLoginTestAsync(DeploySettings settings, DeployCredentials credentials)
+    private async Task RunSteamLoginTestAsync(DeploySettings settings, DeployCredentials credentials, CancellationToken cancellationToken)
     {
         try
         {
@@ -538,14 +1118,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 credentials,
                 Array.Empty<string>(),
                 projectPath,
-                "Steam login test").ConfigureAwait(false);
+                "Steam login test",
+                cancellationToken).ConfigureAwait(false);
             _pendingLogs.Enqueue(result.Succeeded
                 ? "Steam login test successful."
                 : $"ERROR: Steam login test failed with exit code {result.ExitCode}.");
         }
         catch (OperationCanceledException exception)
         {
-            _pendingLogs.Enqueue(exception.Message);
+            _pendingLogs.Enqueue(string.IsNullOrWhiteSpace(exception.Message) ? "Cancelled by user." : exception.Message);
         }
         catch (Exception exception)
         {
@@ -554,6 +1135,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         finally
         {
             HideSteamGuardPanel();
+            ClearOperationCts();
             Interlocked.Exchange(ref _busy, 0);
         }
     }
@@ -563,11 +1145,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         DeployCredentials credentials,
         IReadOnlyList<string> commandArguments,
         string workingDirectory,
-        string operationName)
+        string operationName,
+        CancellationToken cancellationToken)
     {
         string guardCode = string.Empty;
         for (int attempt = 0; attempt < 3; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var arguments = new List<string>();
             if (!string.IsNullOrWhiteSpace(guardCode))
             {
@@ -588,7 +1172,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 null,
                 QueueProcessOutput,
                 CliProcessRunner.IsSteamGuardRequired,
-                GetSteamConsoleLogPath(executable)).ConfigureAwait(false);
+                GetSteamConsoleLogPath(executable),
+                cancellationToken).ConfigureAwait(false);
             if (!result.TerminatedByOutputPattern)
             {
                 return result;
@@ -600,8 +1185,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             }
 
             _pendingLogs.Enqueue("Steam Guard code required.");
-            guardCode = await RequestSteamGuardCodeAsync(operationName).ConfigureAwait(false)
-                ?? throw new OperationCanceledException("Steam Guard entry cancelled.");
+            // Cancelling while the Steam Guard panel is waiting for input has to unblock the
+            // TaskCompletionSource explicitly — it isn't driven by any awaitable that observes the token.
+            using (cancellationToken.Register(CancelSteamGuardCode))
+            {
+                guardCode = await RequestSteamGuardCodeAsync(operationName).ConfigureAwait(false)
+                    ?? throw new OperationCanceledException("Steam Guard entry cancelled.");
+            }
         }
 
         throw new InvalidOperationException("Steam Guard verification did not complete.");
@@ -676,7 +1266,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         });
     }
 
-    private async Task UploadItchAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory)
+    private async Task UploadItchAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory, CancellationToken cancellationToken)
     {
         Require(settings.ItchTarget, "itch.io target");
         Require(settings.ItchChannel, "itch.io channel");
@@ -702,7 +1292,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
         var environment = new Dictionary<string, string> { ["BUTLER_API_KEY"] = credentials.ButlerApiKey };
         _pendingLogs.Enqueue("Uploading to itch.io...");
-        CliProcessResult result = await CliProcessRunner.RunAsync(executable, arguments, workingDirectory, environment, QueueProcessOutput).ConfigureAwait(false);
+        CliProcessResult result = await CliProcessRunner.RunAsync(executable, arguments, workingDirectory, environment, QueueProcessOutput, cancellationToken: cancellationToken).ConfigureAwait(false);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException($"butler failed with exit code {result.ExitCode}.");
@@ -938,6 +1528,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (_buildButton is not null) _buildButton.Disabled = busy || !hasPreset;
         if (_uploadButton is not null) _uploadButton.Disabled = busy;
         if (_buildUploadButton is not null) _buildUploadButton.Disabled = busy || !hasPreset;
+        if (_cancelButton is not null) _cancelButton.Disabled = !busy;
+        UpdateBatchUiState();
         if (_saveSettingsButton is not null)
         {
             _saveSettingsButton.Disabled = busy;

@@ -1,6 +1,7 @@
 #if TOOLS
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Godot;
@@ -95,6 +96,27 @@ public static class DeployConfigStore
         var localConfig = new ConfigFile();
         localConfig.Load(LocalSettingsPath);
         localConfig.SetValue("resources", "selected_build_config", path);
+        localConfig.Save(LocalSettingsPath);
+    }
+
+    // Batch slots persist as an ordered list of res:// paths (empty string = unassigned slot),
+    // one entry per row shown in the Batch Build & Upload tab.
+    public static List<string> LoadBatchConfigPaths()
+    {
+        var localConfig = new ConfigFile();
+        if (localConfig.Load(LocalSettingsPath) != Error.Ok) return new List<string>();
+        string[] paths = localConfig.GetValue("batch", "config_paths", Array.Empty<string>()).AsStringArray();
+        return new List<string>(paths);
+    }
+
+    public static void SaveBatchConfigPaths(IEnumerable<string> paths)
+    {
+        EnsureResourceDirectory(LocalSettingsPath);
+        var localConfig = new ConfigFile();
+        localConfig.Load(LocalSettingsPath);
+        var pathArray = new List<string>();
+        foreach (string path in paths) pathArray.Add(path);
+        localConfig.SetValue("batch", "config_paths", pathArray.ToArray());
         localConfig.Save(LocalSettingsPath);
     }
 
