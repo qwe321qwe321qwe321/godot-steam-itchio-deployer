@@ -120,6 +120,28 @@ public static class DeployConfigStore
         localConfig.Save(LocalSettingsPath);
     }
 
+    // The upload cooldown is a batch-run-wide knob (Steam can reject a depot upload submitted
+    // too soon after the previous one on the same App ID), so it lives next to the batch slot
+    // list in local_settings.cfg instead of on each BuildDeployConfig.
+    public const int DefaultBatchUploadCooldownSeconds = 120;
+
+    public static int LoadBatchUploadCooldownSeconds()
+    {
+        var localConfig = new ConfigFile();
+        if (localConfig.Load(LocalSettingsPath) != Error.Ok) return DefaultBatchUploadCooldownSeconds;
+        int value = localConfig.GetValue("batch", "upload_cooldown_seconds", DefaultBatchUploadCooldownSeconds).AsInt32();
+        return Math.Clamp(value, 0, 3600);
+    }
+
+    public static void SaveBatchUploadCooldownSeconds(int seconds)
+    {
+        EnsureResourceDirectory(LocalSettingsPath);
+        var localConfig = new ConfigFile();
+        localConfig.Load(LocalSettingsPath);
+        localConfig.SetValue("batch", "upload_cooldown_seconds", Math.Clamp(seconds, 0, 3600));
+        localConfig.Save(LocalSettingsPath);
+    }
+
     public static void EnsureNestedConfigs(BuildDeployConfig buildConfig)
     {
         buildConfig.SteamConfig ??= new SteamDeployConfig();

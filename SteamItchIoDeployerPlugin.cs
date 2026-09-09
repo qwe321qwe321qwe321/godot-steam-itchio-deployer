@@ -108,6 +108,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private Label? _batchGeneralHintLabel;
     private Label? _batchProgressLabel;
     private ProgressBar? _batchProgressBar;
+    private SpinBox? _batchCooldownSpin;
     private bool _isBatchMode;
     private int _batchCurrentIndex;
     private int _batchCount;
@@ -430,6 +431,26 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             RebuildBatchList();
         };
         parent.AddChild(_batchAddButton);
+
+        var cooldownRow = new HBoxContainer();
+        parent.AddChild(cooldownRow);
+        cooldownRow.AddChild(new Label
+        {
+            Text = "Steam upload cooldown (s)",
+            TooltipText = "Seconds to wait between two uploads to the same Steam App ID in one batch. Steam can reject a depot upload submitted too soon after the previous one. 0 disables the wait.",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        });
+        _batchCooldownSpin = new SpinBox
+        {
+            MinValue = 0,
+            MaxValue = 3600,
+            Step = 10,
+            Value = DeployConfigStore.LoadBatchUploadCooldownSeconds(),
+            CustomMinimumSize = new Vector2(90, 0),
+        };
+        _batchCooldownSpin.ValueChanged += value => DeployConfigStore.SaveBatchUploadCooldownSeconds((int)value);
+        cooldownRow.AddChild(_batchCooldownSpin);
+
         parent.AddChild(new HSeparator());
 
         _batchProgressLabel = new Label { HorizontalAlignment = HorizontalAlignment.Center, Visible = false };
@@ -687,6 +708,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             // to the UI only through the thread-safe _pendingLogs/_pendingUiActions queues afterward.
             ExpandConsoleResult();
             DeployCredentials credentials = ReadCredentialsFromUi();
+            int uploadCooldownSeconds = (int)(_batchCooldownSpin?.Value ?? DeployConfigStore.DefaultBatchUploadCooldownSeconds);
 
             if (build)
             {
@@ -704,7 +726,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             _batchCount = configs.Count;
             _batchStatusText = "Starting...";
             _pendingLogs.Enqueue($"Starting Batch {(build && upload ? "Build & Upload" : build ? "Build" : "Upload")}...");
-            await RunBatchAsync(configs, credentials, build, upload, skipMissingOutput: !build && upload, cancellationToken).ConfigureAwait(false);
+            await RunBatchAsync(configs, credentials, build, upload, uploadCooldownSeconds, skipMissingOutput: !build && upload, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -719,6 +741,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         DeployCredentials credentials,
         bool build,
         bool upload,
+        int uploadCooldownSeconds,
         bool skipMissingOutput,
         CancellationToken cancellationToken)
     {
@@ -775,7 +798,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                     !string.IsNullOrWhiteSpace(itemSettings.SteamAppId);
                 if (hasSteamAppId && lastSteamUploadCompletedUtcByAppId.TryGetValue(itemSettings.SteamAppId, out DateTime lastCompletedUtc))
                 {
-                    double cooldownSeconds = Math.Max(1, cfg.UploadCooldownSeconds);
+                    double cooldownSeconds = Math.Max(0, uploadCooldownSeconds);
                     double elapsed = (DateTime.UtcNow - lastCompletedUtc).TotalSeconds;
                     double remaining = cooldownSeconds - elapsed;
                     if (remaining > 0)
