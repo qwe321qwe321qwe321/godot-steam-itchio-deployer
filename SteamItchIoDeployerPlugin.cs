@@ -791,7 +791,30 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                         _batchStatusText = $"Waiting {remainingSeconds}s before uploading {label}...";
                         try
                         {
-                            await Task.Delay(TimeSpan.FromSeconds(remaining), cancellationToken).ConfigureAwait(false);
+                            // Log a countdown line at every whole-10-seconds mark instead of going
+                            // silent for the whole wait. Timer jitter can wake the delay a hair
+                            // early, so a mark we already logged counts as already passed.
+                            int loggedMarkSeconds = remainingSeconds % 10 == 0 ? remainingSeconds : int.MaxValue;
+                            while (true)
+                            {
+                                double remainingNow = cooldownSeconds - (DateTime.UtcNow - lastCompletedUtc).TotalSeconds;
+                                if (remainingNow <= 0)
+                                    break;
+
+                                int markSeconds = (int)(remainingNow / 10.0) * 10;
+                                if (markSeconds >= loggedMarkSeconds)
+                                    markSeconds -= 10;
+                                if (markSeconds < 10)
+                                {
+                                    await Task.Delay(TimeSpan.FromSeconds(remainingNow), cancellationToken).ConfigureAwait(false);
+                                    break;
+                                }
+
+                                await Task.Delay(TimeSpan.FromSeconds(remainingNow - markSeconds), cancellationToken).ConfigureAwait(false);
+                                _pendingLogs.Enqueue($"Waiting {markSeconds}s before uploading {label} to avoid Steam rate limits on App ID {itemSettings.SteamAppId}...");
+                                _batchStatusText = $"Waiting {markSeconds}s before uploading {label}...";
+                                loggedMarkSeconds = markSeconds;
+                            }
                         }
                         catch (OperationCanceledException)
                         {
