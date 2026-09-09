@@ -18,6 +18,7 @@ namespace GodotSteamItchIoDeployer;
 public partial class SteamItchIoDeployerPlugin : EditorPlugin
 {
     private const string LogPrefix = "[GodotSteamItchIoDeployer]";
+    private const string BuildConfigFilePrefix = "BuildDeployConfig_";
     private static readonly Regex AnsiControlSequence = new(
         "\\x1B\\[([0-?]*)([ -/]*)([@-~])",
         RegexOptions.Compiled);
@@ -72,9 +73,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private VBoxContainer? _consoleContent;
     private HBoxContainer? _settingsColumns;
     private Button? _saveSettingsButton;
-    private EditorResourcePicker? _buildConfigPicker;
     private EditorResourcePicker? _steamConfigPicker;
     private EditorResourcePicker? _itchConfigPicker;
+    private OptionButton? _buildConfigOption;
+    private string _buildConfigsStamp = string.Empty;
     private Button? _buildButton;
     private Button? _uploadButton;
     private Button? _buildUploadButton;
@@ -176,7 +178,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         root.AddChild(_deployTabContent);
 
         var buildConfigGrid = CreateGrid(_deployTabContent);
-        _buildConfigPicker = AddResourceRow<BuildDeployConfig>(buildConfigGrid, "Build / Deploy Config", _buildConfig);
+        _buildConfigOption = new OptionButton
+        {
+            TooltipText = "Lists every BuildDeployConfig saved under res://deploy/",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+        };
+        PopulateBuildConfigOptions(_buildConfigOption, _buildConfig.ResourcePath, includeUnassigned: false);
+        _buildConfigsStamp = DeployConfigStore.GetDeployDirectoryStamp();
+        _buildConfigOption.ItemSelected += OnBuildConfigOptionSelected;
+        AddRow(buildConfigGrid, "Build / Deploy Config", _buildConfigOption);
 
         var actionButtons = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         _deployTabContent.AddChild(actionButtons);
@@ -213,7 +223,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         var resourceGrid = CreateGrid(buildContent);
         _steamConfigPicker = AddResourceRow<SteamDeployConfig>(resourceGrid, "Steam Config", _buildConfig.SteamConfig!);
         _itchConfigPicker = AddResourceRow<ItchIoDeployConfig>(resourceGrid, "itch.io Config", _buildConfig.ItchIoConfig!);
-        _buildConfigPicker.ResourceChanged += OnBuildConfigChanged;
         _steamConfigPicker.ResourceChanged += OnSteamConfigChanged;
         _itchConfigPicker.ResourceChanged += OnItchConfigChanged;
 
@@ -374,6 +383,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
 
         RefreshPresetsIfChanged();
+        RefreshBuildConfigsIfChanged();
         UpdateButtonState();
     }
 
@@ -498,19 +508,21 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             row.AddChild(new Label { Text = $"{index + 1}.", CustomMinimumSize = new Vector2(24, 0) });
 
-            var picker = new EditorResourcePicker
+            var option = new OptionButton
             {
-                BaseType = nameof(BuildDeployConfig),
-                EditedResource = _batchConfigs[index],
-                Editable = true,
+                TooltipText = "Lists every BuildDeployConfig saved under res://deploy/",
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
             };
-            picker.ResourceChanged += resource =>
+            PopulateBuildConfigOptions(option, _batchConfigs[index]?.ResourcePath, includeUnassigned: true);
+            option.ItemSelected += selectedIndex =>
             {
-                _batchConfigs[index] = resource as BuildDeployConfig;
+                string path = option.GetItemMetadata((int)selectedIndex).AsString();
+                _batchConfigs[index] = string.IsNullOrWhiteSpace(path)
+                    ? null
+                    : ResourceLoader.Load<BuildDeployConfig>(path);
                 SaveBatchConfigsToStore();
             };
-            row.AddChild(picker);
+            row.AddChild(option);
 
             Button upButton = new() { Text = "↑", Disabled = index == 0 };
             upButton.Pressed += () => MoveBatchConfig(index, -1);
@@ -1453,7 +1465,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         if (error == Error.Ok)
         {
             _resourceAssignmentsDirty = false;
-            if (_buildConfigPicker is not null) _buildConfigPicker.EditedResource = _buildConfig;
+            // Saving can take over the path of a previously unsaved config, so the dropdown
+            // has to be repopulated to include (and select) the file it was just written to.
+            if (_buildConfigOption is not null)
+            {
+                PopulateBuildConfigOptions(_buildConfigOption, _buildConfig.ResourcePath, includeUnassigned: false);
+                _buildConfigsStamp = DeployConfigStore.GetDeployDirectoryStamp();
+            }
             if (_steamConfigPicker is not null) _steamConfigPicker.EditedResource = _buildConfig.SteamConfig;
             if (_itchConfigPicker is not null) _itchConfigPicker.EditedResource = _buildConfig.ItchIoConfig;
         }
@@ -1662,6 +1680,77 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             return "invalid";
         }
+    }
+
+    private void OnBuildConfigOptionSelected(long index)
+    {
+        if (_buildConfigOption is null) return;
+        string path = _buildConfigOption.GetItemMetadata((int)index).AsString();
+        if (string.IsNullOrWhiteSpace(path)) return;
+        if (_buildConfig is not null && _buildConfig.ResourcePath == path) return;
+        if (ResourceLoader.Load<BuildDeployConfig>(path) is not { } selected) return;
+        OnBuildConfigChanged(selected);
+    }
+
+    private static void PopulateBuildConfigOptions(OptionButton option, string? selectedPath, bool includeUnassigned)
+    {
+        option.Clear();
+        int selected = -1;
+        if (includeUnassigned)
+        {
+            option.AddItem("(none)");
+            option.SetItemMetadata(0, string.Empty);
+            if (string.IsNullOrWhiteSpace(selectedPath)) selected = 0;
+        }
+
+        foreach (string path in DeployConfigStore.ListBuildConfigPaths())
+        {
+            int index = option.ItemCount;
+            option.AddItem(BuildConfigDisplayName(path));
+            option.SetItemMetadata(index, path);
+            option.GetPopup().SetItemTooltip(index, path);
+            if (path == selectedPath) selected = index;
+        }
+
+        if (selected < 0)
+        {
+            // Keep the current config visible even when it lives outside res://deploy/ or has
+            // not been saved yet, so the dropdown never silently shows a different selection.
+            int index = option.ItemCount;
+            bool saved = !string.IsNullOrWhiteSpace(selectedPath);
+            option.AddItem(saved ? BuildConfigDisplayName(selectedPath!) : "(unsaved)");
+            option.SetItemMetadata(index, saved ? selectedPath! : string.Empty);
+            if (saved) option.GetPopup().SetItemTooltip(index, selectedPath!);
+            selected = index;
+        }
+
+        option.Select(selected);
+    }
+
+    private static string BuildConfigDisplayName(string resourcePath)
+    {
+        string baseName = resourcePath.GetFile().GetBaseName();
+        return baseName.StartsWith(BuildConfigFilePrefix, StringComparison.Ordinal)
+            ? baseName[BuildConfigFilePrefix.Length..]
+            : baseName;
+    }
+
+    private void RefreshBuildConfigsIfChanged()
+    {
+        if (_buildConfigOption is null)
+        {
+            return;
+        }
+
+        string currentStamp = DeployConfigStore.GetDeployDirectoryStamp();
+        if (currentStamp == _buildConfigsStamp)
+        {
+            return;
+        }
+
+        _buildConfigsStamp = currentStamp;
+        PopulateBuildConfigOptions(_buildConfigOption, _buildConfig?.ResourcePath, includeUnassigned: false);
+        AppendLog($"Build/deploy configs refreshed ({_buildConfigOption.ItemCount} found).");
     }
 
     private void UpdateButtonState()

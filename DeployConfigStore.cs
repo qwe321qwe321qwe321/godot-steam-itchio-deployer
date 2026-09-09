@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Godot;
 using SteamItchIoDeployerCore;
@@ -96,6 +97,61 @@ public static class DeployConfigStore
         localConfig.Load(LocalSettingsPath);
         localConfig.SetValue("resources", "selected_build_config", path);
         localConfig.Save(LocalSettingsPath);
+    }
+
+    // Enumerates every BuildDeployConfig saved under res://deploy/ (recursively) so the dock can
+    // offer a plain dropdown instead of the resource picker's quick-load flow. Non-matching
+    // .tres files (Steam/itch.io sub-configs) are filtered out by loading and checking the type.
+    public static List<string> ListBuildConfigPaths()
+    {
+        var paths = new List<string>();
+        string root = Path.Combine(GetProjectRoot(), "deploy");
+        if (!Directory.Exists(root)) return paths;
+        string projectRoot = GetProjectRoot();
+        foreach (string file in Directory.EnumerateFiles(root, "*.tres", SearchOption.AllDirectories))
+        {
+            string resourcePath = $"res://{Path.GetRelativePath(projectRoot, file).Replace('\\', '/')}";
+            if (ResourceLoader.Exists(resourcePath) && ResourceLoader.Load(resourcePath) is BuildDeployConfig)
+            {
+                paths.Add(resourcePath);
+            }
+        }
+
+        paths.Sort(StringComparer.OrdinalIgnoreCase);
+        return paths;
+    }
+
+    // Cheap directory fingerprint (name + mtime + size of every .tres) polled every frame by the
+    // dock to rebuild the config dropdown when files are added, renamed, or edited externally.
+    public static string GetDeployDirectoryStamp()
+    {
+        try
+        {
+            string root = Path.Combine(GetProjectRoot(), "deploy");
+            if (!Directory.Exists(root)) return "missing";
+            var builder = new StringBuilder();
+            foreach (string file in Directory.EnumerateFiles(root, "*.tres", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var info = new FileInfo(file);
+                builder.Append(info.Name)
+                    .Append(':')
+                    .Append(info.Exists ? info.LastWriteTimeUtc.Ticks : -1)
+                    .Append(':')
+                    .Append(info.Exists ? info.Length : -1)
+                    .Append('|');
+            }
+
+            return builder.Length == 0 ? "empty" : builder.ToString();
+        }
+        catch (Exception exception) when (exception is ArgumentException
+                                              or NotSupportedException
+                                              or PathTooLongException
+                                              or IOException
+                                              or UnauthorizedAccessException)
+        {
+            return "invalid";
+        }
     }
 
     // Batch slots persist as an ordered list of res:// paths (empty string = unassigned slot),
