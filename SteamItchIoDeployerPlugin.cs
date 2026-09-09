@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -1031,8 +1032,16 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, stagedOutputPath };
                 string buildFlavor = ResolveBuildFlavor(settings.ExportPreset);
                 var buildEnvironment = new Dictionary<string, string> { ["BuildFlavor"] = buildFlavor };
+                if (settings.Targets.HasFlag(DeployTargets.Steam))
+                {
+                    string steamAppId = NormalizeSteamAppId(settings.SteamAppId);
+                    buildEnvironment["SteamAppId"] = steamAppId;
+                }
                 DateTime exportStartedUtc = DateTime.UtcNow;
-                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}, BuildFlavor={buildFlavor}) to staging output {stagedOutputPath}");
+                string appIdDescription = buildEnvironment.TryGetValue("SteamAppId", out string? configuredAppId)
+                    ? $", SteamAppId={configuredAppId}"
+                    : string.Empty;
+                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}, BuildFlavor={buildFlavor}{appIdDescription}) to staging output {stagedOutputPath}");
                 CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, buildEnvironment, QueueProcessOutput, cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded)
                 {
@@ -1117,7 +1126,8 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
     private async Task UploadSteamAsync(DeploySettings settings, DeployCredentials credentials, string contentRoot, string workingDirectory, CancellationToken cancellationToken)
     {
-        Require(settings.SteamAppId, "Steam App ID");
+        string steamAppId = NormalizeSteamAppId(settings.SteamAppId);
+        settings.SteamAppId = steamAppId;
         Require(settings.SteamDepotId, "Steam Depot ID");
         Require(credentials.SteamUsername, "Steam username");
         Require(credentials.SteamPassword, "Steam password");
@@ -1137,6 +1147,18 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
 
         _pendingLogs.Enqueue("Steam upload completed.");
+    }
+
+    private static string NormalizeSteamAppId(string value)
+    {
+        if (!uint.TryParse(value?.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out uint appId)
+            || appId == 0)
+        {
+            throw new InvalidOperationException(
+                $"Steam App ID must be a positive decimal Steam AppID; received '{value}'.");
+        }
+
+        return appId.ToString(CultureInfo.InvariantCulture);
     }
 
     private void StartSteamLoginTest()
