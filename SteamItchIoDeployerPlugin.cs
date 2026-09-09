@@ -21,17 +21,17 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private static readonly Regex AnsiControlSequence = new(
         "\\x1B\\[([0-?]*)([ -/]*)([@-~])",
         RegexOptions.Compiled);
-    private static readonly Regex PlaytestPresetName = new("playtest", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex ProductionPresetName = new("production|release", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    // Godot performs managed export through a child process, so derive the deployment flavor
-    // from the selected preset name and pass it through the environment-backed BuildFlavor
-    // MSBuild property for consuming C# projects.
+    // Derive the deployment flavor from the selected export preset's custom_features. Godot
+    // performs managed export through a child process, so pass the result through the
+    // environment-backed BuildFlavor MSBuild property for the consuming C# project.
     private static string ResolveBuildFlavor(string exportPreset)
     {
-        if (PlaytestPresetName.IsMatch(exportPreset))
+        IReadOnlyList<string> features = ExportPresetReader.ReadPresetFeatures(exportPreset);
+        if (features.Any(feature => string.Equals(feature, "playtest", StringComparison.OrdinalIgnoreCase)))
             return "Playtest";
-        if (ProductionPresetName.IsMatch(exportPreset))
+        if (features.Any(feature => string.Equals(feature, "production", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(feature, "release", StringComparison.OrdinalIgnoreCase)))
             return "Production";
         return "Dev";
     }
@@ -221,8 +221,12 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _preset = new OptionButton { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         PopulatePresets(_preset, settings.ExportPreset);
         _presetFileStamp = GetPresetFileStamp();
+        _preset.ItemSelected += _ => UpdateExportOutputDisplay();
         AddRow(buildGrid, "Export Preset", _preset);
-        _exportOutput = AddLineRow(buildGrid, "Export Output File", settings.ExportOutputPath, "Example: build/windows/MyGame.exe");
+        _exportOutput = AddLineRow(buildGrid, "Export Output File", string.Empty, "Auto-filled from the preset's Export Path");
+        _exportOutput.Editable = false;
+        _exportOutput.TooltipText = "Read-only: resolved from the selected preset's Export Path in export_presets.cfg";
+        UpdateExportOutputDisplay();
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
         _steamContent = AddStaticSection(steamColumn, "Steam");
@@ -571,12 +575,13 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     // tab's "ready to upload" status and for the overwrite-confirmation dialog.
     private static string? TryResolveOutputDirectory(DeploySettings settings, string projectPath)
     {
-        if (string.IsNullOrWhiteSpace(settings.ExportOutputPath)) return null;
+        string? exportPath = ExportPresetReader.ReadExportPath(settings.ExportPreset);
+        if (string.IsNullOrWhiteSpace(exportPath)) return null;
         try
         {
-            string outputPath = Path.GetFullPath(Path.IsPathRooted(settings.ExportOutputPath)
-                ? settings.ExportOutputPath
-                : Path.Combine(projectPath, settings.ExportOutputPath));
+            string outputPath = Path.GetFullPath(Path.IsPathRooted(exportPath)
+                ? exportPath
+                : Path.Combine(projectPath, exportPath));
             return Path.GetDirectoryName(outputPath);
         }
         catch (Exception exception) when (exception is ArgumentException or NotSupportedException or PathTooLongException)
@@ -1052,7 +1057,20 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             cancellationToken.ThrowIfCancellationRequested();
             string projectPath = ProjectSettings.GlobalizePath("res://");
-            string outputPath = ResolveProjectPath(settings.ExportOutputPath, projectPath);
+            if (string.IsNullOrWhiteSpace(settings.ExportPreset))
+            {
+                throw new InvalidOperationException("Select a Godot export preset first — the export output location is resolved from the preset.");
+            }
+            string? exportPath = ExportPresetReader.ReadExportPath(settings.ExportPreset);
+            if (exportPath is null)
+            {
+                throw new InvalidOperationException($"Export preset '{settings.ExportPreset}' was not found in export_presets.cfg.");
+            }
+            if (string.IsNullOrWhiteSpace(exportPath))
+            {
+                throw new InvalidOperationException($"Export preset '{settings.ExportPreset}' has no Export Path configured — set it in Project > Export > '{settings.ExportPreset}'.");
+            }
+            string outputPath = ResolveProjectPath(exportPath, projectPath);
             string? outputDirectory = Path.GetDirectoryName(outputPath);
             if (string.IsNullOrWhiteSpace(outputDirectory))
             {
@@ -1066,11 +1084,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
             if (build)
             {
-                if (string.IsNullOrWhiteSpace(settings.ExportPreset))
-                {
-                    throw new InvalidOperationException("Select a Godot export preset before building.");
-                }
-
                 stagingDirectory = ExportArtifactValidator.CreateStagingDirectory(projectPath, outputDirectory);
                 string stagedOutputPath = Path.Combine(stagingDirectory, outputFileName);
                 string godotExecutable = OS.GetExecutablePath();
@@ -1486,7 +1499,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private void ApplySettingsToUi(DeploySettings settings)
     {
         if (_preset is not null) PopulatePresets(_preset, settings.ExportPreset);
-        if (_exportOutput is not null) _exportOutput.Text = settings.ExportOutputPath;
+        UpdateExportOutputDisplay();
         if (_buildWithDebug is not null) _buildWithDebug.ButtonPressed = settings.BuildWithDebug;
         if (_steamEnabled is not null) _steamEnabled.ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam);
         if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
@@ -1520,7 +1533,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         {
             Targets = targets,
             ExportPreset = _preset is { ItemCount: > 0 } ? _preset.GetItemText(_preset.Selected) : string.Empty,
-            ExportOutputPath = _exportOutput?.Text.Trim() ?? string.Empty,
             BuildWithDebug = _buildWithDebug?.ButtonPressed == true,
             SteamCmdPath = DeployConfigStore.PreferProjectRelativePath(_steamCmd?.Text ?? string.Empty),
             SteamAppId = _steamAppId?.Text.Trim() ?? string.Empty,
@@ -1550,7 +1562,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         Targets = source.Targets,
         ExportPreset = source.ExportPreset,
-        ExportOutputPath = source.ExportOutputPath,
         BuildWithDebug = source.BuildWithDebug,
         SteamCmdPath = source.SteamCmdPath,
         SteamAppId = source.SteamAppId,
@@ -1573,7 +1584,6 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         left.SteamSetLive == right.SteamSetLive &&
         left.ItchIfChanged == right.ItchIfChanged &&
         string.Equals(left.ExportPreset, right.ExportPreset, StringComparison.Ordinal) &&
-        string.Equals(left.ExportOutputPath, right.ExportOutputPath, StringComparison.Ordinal) &&
         string.Equals(left.SteamCmdPath, right.SteamCmdPath, StringComparison.Ordinal) &&
         string.Equals(left.SteamAppId, right.SteamAppId, StringComparison.Ordinal) &&
         string.Equals(left.SteamDepotId, right.SteamDepotId, StringComparison.Ordinal) &&
@@ -1600,6 +1610,24 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
     }
 
+    private void UpdateExportOutputDisplay()
+    {
+        if (_exportOutput is null || _preset is null) return;
+        string presetName = _preset.ItemCount > 0 ? _preset.GetItemText(_preset.Selected) : string.Empty;
+        string? exportPath = ExportPresetReader.ReadExportPath(presetName);
+        if (!string.IsNullOrWhiteSpace(exportPath))
+        {
+            _exportOutput.Text = exportPath;
+            _exportOutput.PlaceholderText = string.Empty;
+            return;
+        }
+
+        _exportOutput.Text = string.Empty;
+        _exportOutput.PlaceholderText = exportPath is null && !string.IsNullOrWhiteSpace(presetName)
+            ? $"Preset '{presetName}' not found in export_presets.cfg"
+            : "No Export Path set on this preset (Project > Export)";
+    }
+
     private void RefreshPresetsIfChanged()
     {
         if (_preset is null)
@@ -1618,6 +1646,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             : string.Empty;
         _presetFileStamp = currentStamp;
         PopulatePresets(_preset, selectedPreset);
+        UpdateExportOutputDisplay();
         AppendLog($"Export presets refreshed ({_preset.ItemCount} found).");
     }
 

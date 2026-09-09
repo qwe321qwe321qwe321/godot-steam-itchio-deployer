@@ -8,7 +8,6 @@ public sealed class DeploySettings
 {
     public DeployTargets Targets { get; set; } = DeployTargets.Steam;
     public string ExportPreset { get; set; } = string.Empty;
-    public string ExportOutputPath { get; set; } = "build/windows/game.exe";
     public bool BuildWithDebug { get; set; }
 
     public string SteamCmdPath { get; set; } = string.Empty;

@@ -42,13 +42,13 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
 ## Configure
 
 1. Create an export preset under **Project > Export**. The plugin watches `export_presets.cfg` and refreshes the preset list while the editor remains open.
-2. Select the preset and set **Export Output File**, for example `build/windows/MyGame.exe`. Enable **Build With Debug** to use Godot's `--export-debug`; leave it disabled for `--export-release`.
+2. Select the preset. The **Export Output File** row is read-only and shows the preset's **Export Path** from `export_presets.cfg` — configure it under **Project > Export**; the deployer no longer keeps a separate copy. Enable **Build With Debug** to use Godot's `--export-debug`; leave it disabled for `--export-release`.
 3. Select Steam and/or itch.io and fill in the corresponding fields.
    - Steam **Build Description** supports `{Date}`, `{DateTime}`, and `{GitSHA}`. `{GitSHA}` resolves the consuming project's full `git rev-parse HEAD` commit and falls back to `NO_SHA` when Git or repository metadata is unavailable.
    - **Download & Install** next to SteamCMD appears only when the configured path cannot resolve to an existing executable. It downloads Valve's official Windows package, applies its first-run self-updates, verifies it can start, and fills the path automatically.
    - **Download & Install** next to Butler appears only when the configured path cannot resolve to an existing executable. It downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
 4. Configuration follows the original Unity package's ScriptableObject layout, mapped to Godot Resources. The dock exposes Resource pickers for a top-level `BuildDeployConfig` and its referenced `SteamDeployConfig` and `ItchIoDeployConfig`. Use the pickers' menu to load/save `.tres` assets, then use **Save Settings** to persist the edited Resources. The defaults live under `res://deploy/` and are suitable for version control. A legacy `res://deploy_config.cfg` is imported only when those Resources do not exist.
-   - `BuildDeployConfig.tres`: targets, export preset/output, debug build choice, and references to the two platform configs.
+   - `BuildDeployConfig.tres`: targets, export preset, debug build choice, and references to the two platform configs. The export output location is not stored here — it follows the preset's `export_path` in `export_presets.cfg`.
    - `SteamDeployConfig.tres`: SteamCMD path, app/depot IDs, build description, branch, set-live, and ignore patterns.
    - `ItchIoDeployConfig.tres`: butler path, target/channel/version, if-changed, and ignore patterns.
    Paths inside the project are stored relative to the project root (for example `.deployer/tools/steamcmd/steamcmd.exe`); external tools retain absolute paths.
@@ -58,7 +58,7 @@ Build, Steam, and itch.io configuration panels are arranged as three equal, alwa
 
 Use **Test Steam Login** after filling in the SteamCMD path, username, and password. The Steam Guard field is hidden during normal setup. If SteamCMD reports that a Guard code is required during a login test or upload, the plugin stops that attempt, reveals a temporary code prompt, and retries the same operation after submission without rebuilding. Guard detection monitors both redirected process output and SteamCMD's appended `logs/console_log.txt`, because current Windows SteamCMD builds may emit the interactive prompt only to that log.
 
-The export output is a file path because that is what Godot's export CLI requires. Uploads use the parent directory of that file as their content root.
+The export output is a file path because that is what Godot's export CLI requires; it is resolved live from the selected preset's `export_path`. Uploads use the parent directory of that file as their content root.
 
 ## Workflows
 

@@ -56,7 +56,6 @@ public static class DeployConfigStore
         {
             Targets = buildConfig.Targets,
             ExportPreset = buildConfig.ExportPreset,
-            ExportOutputPath = buildConfig.ExportOutputPath,
             BuildWithDebug = buildConfig.BuildWithDebug,
             SteamCmdPath = PreferProjectRelativePath(steam.SteamCmdPath),
             SteamAppId = steam.AppId,
@@ -205,7 +204,6 @@ public static class DeployConfigStore
         {
             settings.Targets = (DeployTargets)config.GetValue("build", "targets", (long)settings.Targets).AsInt64();
             settings.ExportPreset = ReadString(config, "build", "export_preset", settings.ExportPreset);
-            settings.ExportOutputPath = ReadString(config, "build", "export_output_path", settings.ExportOutputPath);
             settings.BuildWithDebug = config.GetValue("build", "with_debug", settings.BuildWithDebug).AsBool();
             settings.SteamCmdPath = ReadString(config, "steam", "steamcmd_path", settings.SteamCmdPath);
             settings.SteamAppId = ReadString(config, "steam", "app_id", settings.SteamAppId);
@@ -238,7 +236,6 @@ public static class DeployConfigStore
         EnsureNestedConfigs(buildConfig);
         buildConfig.Targets = settings.Targets;
         buildConfig.ExportPreset = settings.ExportPreset;
-        buildConfig.ExportOutputPath = settings.ExportOutputPath;
         buildConfig.BuildWithDebug = settings.BuildWithDebug;
         SteamDeployConfig steam = buildConfig.SteamConfig!;
         steam.SteamCmdPath = PreferProjectRelativePath(settings.SteamCmdPath);
