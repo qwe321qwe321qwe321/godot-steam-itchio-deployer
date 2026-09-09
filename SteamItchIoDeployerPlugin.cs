@@ -393,6 +393,15 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _mainTab = tab;
         if (_deployTabContent is not null) _deployTabContent.Visible = tab == MainTab.Deploy;
         if (_batchTabContent is not null) _batchTabContent.Visible = tab == MainTab.Batch;
+        if (tab == MainTab.Batch)
+        {
+            // Rows rendered by a pre-reload plugin instance can survive a C# assembly reload
+            // while _batchConfigs restarts empty, leaving stale rows beside the per-frame
+            // "add at least one config" hint. Re-syncing from the store on every tab switch
+            // makes that orphaned UI self-correct.
+            LoadBatchConfigsFromStore();
+            RebuildBatchList();
+        }
     }
 
     private void BuildBatchTabUi(VBoxContainer parent)

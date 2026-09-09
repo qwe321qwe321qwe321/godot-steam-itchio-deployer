@@ -77,6 +77,10 @@ Official download sources:
 - SteamCMD: `https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip`
 - Butler broth channel: `https://broth.itch.zone/butler/<os>-<arch>/LATEST/archive/default`
 
+## Batch Build & Upload
+
+The **Batch Build & Upload** tab chains multiple `BuildDeployConfig` resources; each one is built and uploaded in sequence using the credentials from the Deploy tab. The ordered slot list is machine-local and persists as `res://.deployer/local_settings.cfg` (`[batch] config_paths`), so it survives editor restarts but does not follow version control. The slot rows are rebuilt from that file every time the tab is shown, which also self-corrects rows left behind by a C# assembly reload.
+
 ## License
 
 [MIT](LICENSE)
