@@ -42,6 +42,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private EditorDock? _dock;
     private OptionButton? _preset;
     private LineEdit? _exportOutput;
+    private Button? _openExportOutputFolderButton;
     private CheckBox? _buildWithDebug;
     private CheckBox? _steamEnabled;
     private LineEdit? _steamCmd;
@@ -236,6 +237,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput.Editable = false;
         _exportOutput.TooltipText = "Read-only: resolved from the selected preset's Export Path in export_presets.cfg";
         UpdateExportOutputDisplay();
+        buildGrid.AddChild(new Control());
+        _openExportOutputFolderButton = new Button { Text = "Open Folder" };
+        _openExportOutputFolderButton.Pressed += OnOpenExportOutputFolderPressed;
+        buildGrid.AddChild(_openExportOutputFolderButton);
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
 
         _steamContent = AddStaticSection(steamColumn, "Steam");
@@ -1644,6 +1649,27 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput.PlaceholderText = exportPath is null && !string.IsNullOrWhiteSpace(presetName)
             ? $"Preset '{presetName}' not found in export_presets.cfg"
             : "No Export Path set on this preset (Project > Export)";
+    }
+
+    private void OnOpenExportOutputFolderPressed()
+    {
+        string projectPath = ProjectSettings.GlobalizePath("res://");
+        string? directory = TryResolveOutputDirectory(ReadSettingsFromUi(), projectPath);
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            AppendLog("Could not resolve the export output folder — select an export preset with an Export Path first.");
+            return;
+        }
+
+        if (!Directory.Exists(directory))
+        {
+            AppendLog($"Export output folder does not exist yet: {directory}");
+            return;
+        }
+
+        Error error = OS.ShellOpen(new Uri(directory).AbsoluteUri);
+        if (error != Error.Ok)
+            AppendLog($"Failed to open export output folder '{directory}': {error}");
     }
 
     private void RefreshPresetsIfChanged()
