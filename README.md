@@ -49,6 +49,7 @@ For release ZIP or Godot Asset Library distribution, package this repository so 
    - **Download & Install** next to Butler appears only when the configured path cannot resolve to an existing executable. It downloads the latest official itch.io broth package for the current OS/CPU architecture, verifies its version, and fills the path automatically.
 4. Configuration follows the original Unity package's ScriptableObject layout, mapped to Godot Resources. The top-level `BuildDeployConfig` is chosen from a dropdown that lists every `BuildDeployConfig` saved under `res://deploy/` (sub-folders included) and refreshes automatically when those files change; the referenced `SteamDeployConfig` and `ItchIoDeployConfig` remain Resource pickers. Use **Save Settings** to persist the edited Resources. The defaults live under `res://deploy/` and are suitable for version control. A legacy `res://deploy_config.cfg` is imported only when those Resources do not exist.
    - `BuildDeployConfig.tres`: targets, export preset, debug build choice, and references to the two platform configs. The export output location is not stored here — it follows the preset's `export_path` in `export_presets.cfg`.
+   - `BuildDeployConfig.tres` also carries **Extra Output Files**: project files copied into the export output directory after a successful export (see below).
    - `SteamDeployConfig.tres`: SteamCMD path, app/depot IDs, build description, branch, set-live, and ignore patterns.
    - `ItchIoDeployConfig.tres`: butler path, target/channel/version, if-changed, and ignore patterns.
    Paths inside the project are stored relative to the project root (for example `.deployer/tools/steamcmd/steamcmd.exe`); external tools retain absolute paths.
@@ -59,6 +60,17 @@ Build, Steam, and itch.io configuration panels are arranged as three equal, alwa
 Use **Test Steam Login** after filling in the SteamCMD path, username, and password. The Steam Guard field is hidden during normal setup. If SteamCMD reports that a Guard code is required during a login test or upload, the plugin stops that attempt, reveals a temporary code prompt, and retries the same operation after submission without rebuilding. Guard detection monitors both redirected process output and SteamCMD's appended `logs/console_log.txt`, because current Windows SteamCMD builds may emit the interactive prompt only to that log.
 
 The export output is a file path because that is what Godot's export CLI requires; it is resolved live from the selected preset's `export_path`. Uploads use the parent directory of that file as their content root.
+
+### Extra output files
+
+`BuildDeployConfig.ExtraOutputFiles` lists files that are shipped alongside the export but are not produced by it — for example `steam_appid.txt`, a changelog, or a third-party runtime DLL. Edit the list on the resource in the Inspector: each entry gets a file picker rooted at `res://` (the dock shows the resulting file names read-only, because the picker lives in the Inspector).
+
+- Entries may be `res://` paths, paths relative to the project root, or absolute paths.
+- Files are copied flat into the output directory root; sub-directory structure from the source path is not recreated.
+- The list is resolved **before** the export starts, so a missing entry, a directory entry, or two entries that would land on the same output file name fails in seconds instead of after a full export.
+- The copy happens into the staging directory, so extra files are promoted to the output directory together with the export artifacts, and uploads always see them.
+- An entry whose file name collides with an exported artifact replaces it and logs a warning rather than discarding an otherwise successful build.
+- **Upload** on its own does not copy anything: it uploads the output directory as the last build left it.
 
 ## Workflows
 

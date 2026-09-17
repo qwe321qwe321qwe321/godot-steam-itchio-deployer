@@ -58,6 +58,7 @@ public static class DeployConfigStore
             Targets = buildConfig.Targets,
             ExportPreset = buildConfig.ExportPreset,
             BuildWithDebug = buildConfig.BuildWithDebug,
+            ExtraOutputFiles = buildConfig.ExtraOutputFiles?.ToArray() ?? Array.Empty<string>(),
             SteamCmdPath = PreferProjectRelativePath(steam.SteamCmdPath),
             SteamAppId = steam.AppId,
             SteamDepotId = steam.DepotId,
@@ -293,6 +294,15 @@ public static class DeployConfigStore
         buildConfig.Targets = settings.Targets;
         buildConfig.ExportPreset = settings.ExportPreset;
         buildConfig.BuildWithDebug = settings.BuildWithDebug;
+        // Mutate the existing Godot array in place: the Inspector may still be editing this very
+        // instance, and replacing it would leave that editor bound to a detached array.
+        Godot.Collections.Array<string> extraFiles = buildConfig.ExtraOutputFiles ?? new Godot.Collections.Array<string>();
+        extraFiles.Clear();
+        foreach (string extraFile in settings.ExtraOutputFiles)
+        {
+            extraFiles.Add(extraFile);
+        }
+        buildConfig.ExtraOutputFiles = extraFiles;
         SteamDeployConfig steam = buildConfig.SteamConfig!;
         steam.SteamCmdPath = PreferProjectRelativePath(settings.SteamCmdPath);
         steam.AppId = settings.SteamAppId;
