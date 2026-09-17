@@ -123,6 +123,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
     public override void _EnterTree()
     {
+        RegisterAbortMarkerSetting();
         _buildConfig = DeployConfigStore.LoadOrCreateBuildConfig();
         DeploySettings settings = DeployConfigStore.ToSettings(_buildConfig);
         DeployCredentials credentials = DeployConfigStore.LoadCredentials();
@@ -598,6 +599,48 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         }
 
         DeployConfigStore.SaveBatchConfigPaths(paths);
+    }
+
+    // Substrings that, when they appear in the export process output, mean the produced artifact
+    // must not be deployed. EditorExportPlugin has no API to fail an export, so a project that
+    // enforces deliverable-content contracts from an export plugin can only GD.PushError while
+    // Godot still exits 0 and writes a complete artifact; naming that plugin's failure prefix here
+    // is what turns it into an aborted deploy. Empty by default, so nothing changes for projects
+    // that do not opt in. Project-wide rather than a per-BuildDeployConfig field: which
+    // export-plugin errors make a build undeliverable does not vary between deploy targets.
+    private const string AbortMarkerSetting = "deployer/export/abort_on_output_markers";
+
+    // Declared on every editor start so the entry shows up in Project Settings before anyone sets
+    // it, without ever overwriting a value the project already stores.
+    private static void RegisterAbortMarkerSetting()
+    {
+        if (!ProjectSettings.HasSetting(AbortMarkerSetting))
+            ProjectSettings.SetSetting(AbortMarkerSetting, Array.Empty<string>());
+
+        ProjectSettings.SetInitialValue(AbortMarkerSetting, Array.Empty<string>());
+        ProjectSettings.AddPropertyInfo(new Godot.Collections.Dictionary
+        {
+            { "name", AbortMarkerSetting },
+            { "type", (int)Variant.Type.PackedStringArray },
+            { "hint", (int)PropertyHint.None },
+        });
+    }
+
+    private static IReadOnlyList<string> ReadAbortMarkers()
+    {
+        Variant value = ProjectSettings.GetSetting(AbortMarkerSetting);
+        if (value.VariantType == Variant.Type.Nil)
+            return Array.Empty<string>();
+
+        var markers = new List<string>();
+        foreach (string entry in value.AsStringArray())
+        {
+            string trimmed = entry?.Trim() ?? string.Empty;
+            if (trimmed.Length > 0)
+                markers.Add(trimmed);
+        }
+
+        return markers;
     }
 
     // Non-throwing counterpart of ResolveProjectPath, safe to poll every frame for the batch
@@ -1142,6 +1185,19 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 if (CliProcessRunner.IsGodotExportBuildFailure(result.CombinedOutput))
                 {
                     throw new InvalidOperationException("Godot reported a .NET build failure even though the export process returned exit code 0.");
+                }
+                // EditorExportPlugin has no way to fail the export, so a project that validates
+                // its own deliverable content from an export plugin can only report the problem
+                // with GD.PushError while Godot still exits 0 and writes a complete artifact.
+                // Without this check the deploy would happily upload that artifact.
+                string? failureMarker = CliProcessRunner.FindConfiguredExportFailureMarker(
+                    result.CombinedOutput, ReadAbortMarkers());
+                if (failureMarker is not null)
+                {
+                    throw new InvalidOperationException(
+                        $"Export output contains the failure marker \"{failureMarker}\" configured in "
+                        + $"{AbortMarkerSetting}, so this build is not deliverable. "
+                        + "Check the export log above for the reason.");
                 }
 
                 ExportArtifactValidator.ValidateExportOutput(stagedOutputPath);

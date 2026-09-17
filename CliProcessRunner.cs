@@ -40,6 +40,25 @@ public static class CliProcessRunner
         return false;
     }
 
+    // Returns the first configured marker present in the output, or null when the output is clean.
+    // The marker itself is returned (not just a bool) so the caller can name it in the error.
+    public static string? FindConfiguredExportFailureMarker(string output, IReadOnlyList<string>? markers)
+    {
+        if (string.IsNullOrEmpty(output) || markers is null)
+            return null;
+
+        foreach (string marker in markers)
+        {
+            if (!string.IsNullOrWhiteSpace(marker)
+                && output.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return marker;
+            }
+        }
+
+        return null;
+    }
+
     public static async Task<CliProcessResult> RunAsync(
         string executablePath,
         IReadOnlyList<string> arguments,
