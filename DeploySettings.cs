@@ -1,5 +1,6 @@
 #if TOOLS
 #nullable enable
+using System;
 using SteamItchIoDeployerCore;
 
 namespace GodotSteamItchIoDeployer;
@@ -9,6 +10,9 @@ public sealed class DeploySettings
     public DeployTargets Targets { get; set; } = DeployTargets.Steam;
     public string ExportPreset { get; set; } = string.Empty;
     public bool BuildWithDebug { get; set; }
+
+    // res:// (or project-relative / absolute) paths copied into the export output directory.
+    public string[] ExtraOutputFiles { get; set; } = Array.Empty<string>();
 
     public string SteamCmdPath { get; set; } = string.Empty;
     public string SteamAppId { get; set; } = string.Empty;

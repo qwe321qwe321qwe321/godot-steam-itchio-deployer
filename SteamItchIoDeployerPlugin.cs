@@ -44,6 +44,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private LineEdit? _exportOutput;
     private Button? _openExportOutputFolderButton;
     private CheckBox? _buildWithDebug;
+    private Label? _extraOutputFilesLabel;
     private CheckBox? _steamEnabled;
     private LineEdit? _steamCmd;
     private LineEdit? _steamAppId;
@@ -242,6 +243,14 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _openExportOutputFolderButton.Pressed += OnOpenExportOutputFolderPressed;
         buildGrid.AddChild(_openExportOutputFolderButton);
         _buildWithDebug = AddCheckRow(buildGrid, "Build With Debug", settings.BuildWithDebug);
+        _extraOutputFilesLabel = new Label
+        {
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            TooltipText = "Read-only: edit Extra Output Files on the BuildDeployConfig resource in the Inspector",
+        };
+        AddRow(buildGrid, "Extra Output Files", _extraOutputFilesLabel);
+        UpdateExtraOutputFilesDisplay(settings);
 
         _steamContent = AddStaticSection(steamColumn, "Steam");
         _steamEnabled = new CheckBox { Text = "Upload to Steam", ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam) };
@@ -1101,6 +1110,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
 
             if (build)
             {
+                // Resolved before the export so a missing or ambiguous extra file fails in seconds
+                // instead of after a full export.
+                List<ExtraOutputFileCopier.ExtraOutputFile> extraOutputFiles =
+                    ExtraOutputFileCopier.Resolve(settings.ExtraOutputFiles);
                 stagingDirectory = ExportArtifactValidator.CreateStagingDirectory(projectPath, outputDirectory);
                 string stagedOutputPath = Path.Combine(stagingDirectory, outputFileName);
                 string godotExecutable = OS.GetExecutablePath();
@@ -1137,6 +1150,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                     exportStartedUtc);
                 ExportArtifactValidator.ValidatePackagedManagedAssemblies(stagingDirectory, expectedSha);
                 _pendingLogs.Enqueue($"Managed build verified: {Path.GetFileName(managedAssembly)} ({expectedSha})");
+
+                foreach (string logLine in ExtraOutputFileCopier.CopyInto(extraOutputFiles, stagingDirectory))
+                {
+                    _pendingLogs.Enqueue(logLine);
+                }
 
                 string? previousOutputBackup = ExportArtifactValidator.PromoteStagedBuild(stagingDirectory, outputDirectory);
                 stagingDirectory = null;
@@ -1523,6 +1541,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     {
         if (_preset is not null) PopulatePresets(_preset, settings.ExportPreset);
         UpdateExportOutputDisplay();
+        UpdateExtraOutputFilesDisplay(settings);
         if (_buildWithDebug is not null) _buildWithDebug.ButtonPressed = settings.BuildWithDebug;
         if (_steamEnabled is not null) _steamEnabled.ButtonPressed = settings.Targets.HasFlag(DeployTargets.Steam);
         if (_steamCmd is not null) _steamCmd.Text = settings.SteamCmdPath;
@@ -1557,6 +1576,10 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
             Targets = targets,
             ExportPreset = _preset is { ItemCount: > 0 } ? _preset.GetItemText(_preset.Selected) : string.Empty,
             BuildWithDebug = _buildWithDebug?.ButtonPressed == true,
+            // Extra output files are edited in the Inspector (the res:// file picker lives there),
+            // not in this dock. Carrying the loaded config's list through keeps Save Settings — and
+            // the implicit save every Build performs — from wiping it.
+            ExtraOutputFiles = _buildConfig?.ExtraOutputFiles?.ToArray() ?? Array.Empty<string>(),
             SteamCmdPath = DeployConfigStore.PreferProjectRelativePath(_steamCmd?.Text ?? string.Empty),
             SteamAppId = _steamAppId?.Text.Trim() ?? string.Empty,
             SteamDepotId = _steamDepotId?.Text.Trim() ?? string.Empty,
@@ -1586,6 +1609,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         Targets = source.Targets,
         ExportPreset = source.ExportPreset,
         BuildWithDebug = source.BuildWithDebug,
+        ExtraOutputFiles = (string[])source.ExtraOutputFiles.Clone(),
         SteamCmdPath = source.SteamCmdPath,
         SteamAppId = source.SteamAppId,
         SteamDepotId = source.SteamDepotId,
@@ -1607,6 +1631,7 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         left.SteamSetLive == right.SteamSetLive &&
         left.ItchIfChanged == right.ItchIfChanged &&
         string.Equals(left.ExportPreset, right.ExportPreset, StringComparison.Ordinal) &&
+        left.ExtraOutputFiles.SequenceEqual(right.ExtraOutputFiles, StringComparer.Ordinal) &&
         string.Equals(left.SteamCmdPath, right.SteamCmdPath, StringComparison.Ordinal) &&
         string.Equals(left.SteamAppId, right.SteamAppId, StringComparison.Ordinal) &&
         string.Equals(left.SteamDepotId, right.SteamDepotId, StringComparison.Ordinal) &&
@@ -1649,6 +1674,20 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
         _exportOutput.PlaceholderText = exportPath is null && !string.IsNullOrWhiteSpace(presetName)
             ? $"Preset '{presetName}' not found in export_presets.cfg"
             : "No Export Path set on this preset (Project > Export)";
+    }
+
+    // Mirrors the selected config's Extra Output Files so the dock shows what a build will copy
+    // into the output directory. The list itself is edited on the resource in the Inspector.
+    private void UpdateExtraOutputFilesDisplay(DeploySettings settings)
+    {
+        if (_extraOutputFilesLabel is null) return;
+        string[] fileNames = settings.ExtraOutputFiles
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path.Trim().GetFile())
+            .ToArray();
+        _extraOutputFilesLabel.Text = fileNames.Length == 0
+            ? "None (set on the config resource)"
+            : string.Join(", ", fileNames);
     }
 
     private void OnOpenExportOutputFolderPressed()
