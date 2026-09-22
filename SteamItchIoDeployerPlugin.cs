@@ -20,6 +20,20 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
     private static readonly Regex AnsiControlSequence = new(
         "\\x1B\\[([0-?]*)([ -/]*)([@-~])",
         RegexOptions.Compiled);
+    private static readonly Regex PlaytestPresetName = new("playtest", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex ProductionPresetName = new("production|release", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // Godot performs managed export through a child process, so derive the deployment flavor
+    // from the selected preset name and pass it through the environment-backed BuildFlavor
+    // MSBuild property for consuming C# projects.
+    private static string ResolveBuildFlavor(string exportPreset)
+    {
+        if (PlaytestPresetName.IsMatch(exportPreset))
+            return "Playtest";
+        if (ProductionPresetName.IsMatch(exportPreset))
+            return "Production";
+        return "Dev";
+    }
 
     private readonly ConcurrentQueue<string> _pendingLogs = new();
     private readonly ConcurrentQueue<Action> _pendingUiActions = new();
@@ -1006,9 +1020,11 @@ public partial class SteamItchIoDeployerPlugin : EditorPlugin
                 string godotExecutable = OS.GetExecutablePath();
                 string exportMode = settings.BuildWithDebug ? "--export-debug" : "--export-release";
                 var arguments = new[] { "--headless", "--path", projectPath, exportMode, settings.ExportPreset, stagedOutputPath };
+                string buildFlavor = ResolveBuildFlavor(settings.ExportPreset);
+                var buildEnvironment = new Dictionary<string, string> { ["BuildFlavor"] = buildFlavor };
                 DateTime exportStartedUtc = DateTime.UtcNow;
-                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}) to staging output {stagedOutputPath}");
-                CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, null, QueueProcessOutput, cancellationToken: cancellationToken).ConfigureAwait(false);
+                _pendingLogs.Enqueue($"Exporting preset '{settings.ExportPreset}' ({(settings.BuildWithDebug ? "debug" : "release")}, BuildFlavor={buildFlavor}) to staging output {stagedOutputPath}");
+                CliProcessResult result = await CliProcessRunner.RunAsync(godotExecutable, arguments, projectPath, buildEnvironment, QueueProcessOutput, cancellationToken: cancellationToken).ConfigureAwait(false);
                 if (!result.Succeeded)
                 {
                     throw new InvalidOperationException($"Godot export failed with exit code {result.ExitCode}.");
